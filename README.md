@@ -23,19 +23,25 @@
 программу в каталог пользовательских приложений, добавляет ярлык «Тише / Mute»
 и настройку обнаружения IBus. Системные словари IBus сохраняются в пути поиска.
 
-Сохраните работу, **выйдите из сеанса Ubuntu и войдите снова**, затем:
+Откройте **«Тише / Mute»** и нажмите **«Запустить фильтр в фоне»**.
+Или выполните:
 
 ```bash
 /usr/bin/python3 run.py enable
 ```
 
-Команда добавит источники **«Тише EN — English»** и **«Тише RU — Русский»**.
-Вместо команды можно открыть «Тише / Mute» → «Где работает фильтр» →
-**«Добавить Тише EN/RU»**.
-Выберите нужный через **Super+Space** или меню языка в верхней панели GNOME.
-Обычные источники EN/RU сохраняются и обходят фильтр; для тренировки используйте
-источники «Тише». IBus запускает процесс автоматически при выборе источника,
-отдельный постоянно открытый интерфейс не нужен.
+Активация загрузит метод ввода и заменит обычные источники **US/RU** на
+**«Тише EN — English»** и **«Тише RU — Русский»**, сохранив порядок и другие
+раскладки. Если текущий IBus ещё не обнаружил программу, команда один раз
+перезагрузит пользовательскую службу ввода. Выходить из сеанса не нужно.
+**Super+Space** продолжает переключать язык.
+
+После активации **закройте окно настроек**: оно не управляет временем жизни
+фильтра. IBus запускает процесс без окна, когда выбран источник «Тише», в том
+числе после нового входа в Ubuntu. Окно появляется только при срабатывании или
+когда вы сами открываете настройки. Статус вверху окна проверяет фактический
+источник ввода; сохранённый переключатель «включён» сам по себе не означает,
+что установка активирована.
 
 Настройки: меню приложений → **Тише / Mute**, либо:
 
@@ -47,7 +53,8 @@
 **Ctrl+Shift+F12** в поле с активным «Тише» включает паузу на пять минут.
 В настройках доступны выключение, пауза, продолжение, длительность и нарастание
 паузы, звук, языки, дополнительные слова, исключения и локальная проверка слова.
-Переключение на обычный источник ввода всегда остаётся доступным.
+Пауза и выключение в настройках сохраняют выбранную раскладку и пропускают ввод.
+`run.py disable` возвращает обычные US/RU, сохраняя прочие раскладки.
 
 Нужны системные Python 3, PyGObject, GTK 3 и IBus. В стандартной Ubuntu Desktop
 они обычно установлены. Если `doctor` сообщает об отсутствии зависимости:
@@ -57,7 +64,8 @@ sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-ibus-1.0 ibus
 ```
 
 На других окружениях рабочего стола установка через GNOME systemd unit не
-поддерживается. Команда не перезапускает IBus посреди работы и не завершает сеанс.
+поддерживается. Установка копирует файлы и не меняет источник ввода до активации;
+активация при необходимости перезагружает службу IBus, не завершая сеанс.
 
 ## Добавить язык или набор слов
 
@@ -139,6 +147,7 @@ libxkbcommon и затем проходят ту же проверку слов.
 /usr/bin/python3 -m unittest discover -s tests -v
 /usr/bin/python3 tools/benchmark.py
 bash tools/test-ibus.sh
+bash tools/test-ui.sh
 ```
 
 Проверка IBus использует отдельную временную D-Bus/IBus сессию. Она не меняет
@@ -164,9 +173,13 @@ escalating cooldown. It uses existing IBus/GTK libraries and no AI or paid API.
 Add UTF-8 `*.txt` files with one word per line through the dictionary folder in
 Settings. Exact words are the default; a trailing `*` enables prefix matching.
 
-Install with `/usr/bin/python3 run.py install`, log out and in, then run
-`/usr/bin/python3 run.py enable`. Select **Тише EN/RU** with Super+Space.
-Ctrl+Shift+F12 pauses for five minutes. Coverage depends on the application
+Install with `/usr/bin/python3 run.py install`, then open the app and click
+**Запустить фильтр в фоне**, or run `/usr/bin/python3 run.py enable`.
+Activation loads the engine and replaces ordinary US/RU sources with
+**Тише EN/RU**, preserving other layouts. Close the settings window afterward:
+IBus runs the filter independently, including after your next login.
+Super+Space switches language; Ctrl+Shift+F12 pauses for five minutes.
+Coverage depends on the application
 using IBus and the selected input source; no measured 99% guarantee is claimed.
 
 Implementation references: [IBus engine API](https://ibus.github.io/docs/ibus-1.5/IBusEngine.html),

@@ -112,11 +112,11 @@ StartupNotify=true
     config.wordlist_dir().mkdir(parents=True, exist_ok=True, mode=0o700)
     result = subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
     print("Тише установлен для текущего пользователя. Настройки: меню приложений → Тише / Mute.")
-    print("Сохраните работу и выйдите из сеанса Ubuntu, затем войдите снова.")
-    print(f"После входа: /usr/bin/python3 {shlex.quote(str(destination / 'run.py'))} enable")
-    print("Это добавит источники Тише EN/RU, сохранив текущие источники. Super+Space — выбор.")
+    print("Откройте настройки и нажмите «Запустить фильтр в фоне».")
+    print(f"Или выполните: /usr/bin/python3 {shlex.quote(str(destination / 'run.py'))} enable")
+    print("Активация загрузит Тише и заменит обычные US/RU; другие раскладки сохранятся.")
     if result.returncode:
-        print("Шина сеанса недоступна; systemd применит настройку при следующем входе.")
+        print("Шина сеанса недоступна. Выполните активацию из своего сеанса GNOME.")
     return 0
 
 

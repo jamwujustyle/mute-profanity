@@ -6,17 +6,20 @@ or administrator access is used by the app.
 
 ## Checks
 
-- **43 unit checks passed**, including Russian morphology, English compounds,
+- **55 unit checks passed**, including Russian morphology, English compounds,
   transliteration, masked spellings, innocent-word regressions, custom lists,
-  config validation, bounded input, composition, cooldowns and staged installation.
-  Fourteen integration checks are intentionally skipped by normal discovery.
+  config validation, bounded input, composition, cooldowns, staged installation,
+  activation/source mapping, bounded IBus loading and truthful readiness reports.
+  Eighteen integration/GTK checks are intentionally skipped by normal discovery.
 - **14 real IBus integration checks passed** using a private D-Bus/IBus session.
   They verify registry discovery from the installation XML, both layout metadata,
   safe commits, blocked words and submission, Russian keyvals, Backspace/native
   navigation, shared cooldown, emergency pause, key-release handling, password,
   PIN and private-field bypass, safe/unsafe focus loss, invisible formatting,
   automatic dictionary reload and accented Compose input.
-- Native GTK preferences and intervention windows were constructed and exercised
+- **4 GTK activation checks passed** under isolated Xvfb, covering missing setup,
+  actual active-source status, closing settings without disabling the engine,
+  and asynchronous activation failure. Native preferences/intervention windows were exercised
   under an isolated Xvfb display. Screenshots were visually inspected. Settings,
   validation, pause/resume, local word checks and countdown completion worked.
 - Python compilation, shell syntax and whitespace checks passed.
@@ -44,6 +47,7 @@ Reproduce from the repository:
 ```bash
 /usr/bin/python3 -m unittest discover -s tests -v
 bash tools/test-ibus.sh
+bash tools/test-ui.sh
 /usr/bin/python3 tools/benchmark.py
 /usr/bin/python3 tools/measure-idle.py
 ```
@@ -53,12 +57,18 @@ It does not send keys to, read text from or change sources in the user's desktop
 
 ## Activation and limits
 
-Prepared and verified: installable native app, per-user desktop launcher,
-IBus component registration and GNOME service configuration.
+Installed and verified: native app, per-user desktop launcher, IBus component
+registration and GNOME service configuration. Live diagnostics confirmed both
+guarded sources configured, `mute-en` selected, and the separate engine process
+running while no settings-window process was open.
+
+Activation loads missing engines through the user's IBus service and replaces
+ordinary US/RU sources with guarded sources. The settings window reports actual
+readiness and may be closed. Other keyboard layouts keep their order and can
+remain selected; the status then explains how to choose a guarded source.
 
 Not observed: typing in the user's ordinary applications after selecting the
-installed source. A fresh login is needed for GNOME's input-source discovery;
-the installer does not log the user out or interrupt the current IBus process.
+installed source. No messages were typed or sent in Telegram during diagnostics.
 
 There is no measured 99% recall claim. IBus compatibility and selected source
 determine coverage. Clipboard insertion, other input sources and editing text

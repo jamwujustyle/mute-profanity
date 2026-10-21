@@ -18,7 +18,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 
 _CSS = b"""
@@ -88,6 +88,7 @@ class Preferences(Gtk.Window):
 
         self.config = config
         self.settings = config.load()
+        self.setup_pending = False
         self.set_default_size(600, 700)
         self.set_size_request(470, 420)
         self.set_position(Gtk.WindowPosition.CENTER)
@@ -110,12 +111,16 @@ class Preferences(Gtk.Window):
         title = _label("Привычку можно изменить")
         title.get_style_context().add_class("page-title")
         intro.pack_start(title, False, False, 0)
-        intro.pack_start(_label("Фильтр останавливает ругательства во время набора и даёт короткую паузу.", muted=True), False, False, 0)
+        intro.pack_start(_label("Ругательство блокируется, когда вы завершаете слово пробелом или Enter.", muted=True), False, False, 0)
         page.pack_start(intro, False, False, 0)
 
         self.status = _label("")
         self.status.get_style_context().add_class("status")
         page.pack_start(self.status, False, False, 0)
+        self.setup_button = _button("Запустить фильтр в фоне", self._activate, primary=True)
+        self.setup_button.set_halign(Gtk.Align.START)
+        self.setup_button.set_no_show_all(True)
+        page.pack_start(self.setup_button, False, False, 0)
 
         behavior = _card()
         self.enabled = Gtk.Switch(active=self.settings.enabled)
@@ -156,10 +161,7 @@ class Preferences(Gtk.Window):
         instructions = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         instructions.set_margin_top(10)
         instructions.pack_start(_label("Работает только с источниками ввода «Тише EN» / «Тише RU» в приложениях с IBus. Super+Space — сменить язык. Ctrl+Shift+F12 — пауза на 5 минут."), False, False, 0)
-        instructions.pack_start(_label("Добавьте оба источника в настройках клавиатуры и выбирайте их при наборе. Сохранение этих настроек само по себе не меняет источник ввода.", muted=True), False, False, 0)
-        add_sources = _button("Добавить Тише EN/RU", self._enable_sources)
-        add_sources.set_halign(Gtk.Align.START)
-        instructions.pack_start(add_sources, False, False, 0)
+        instructions.pack_start(_label("Кнопка «Запустить фильтр в фоне» загружает метод ввода и заменяет обычные US/RU на Тише EN/RU. Другие раскладки сохраняются. После активации окно можно закрыть: IBus запускает фильтр самостоятельно при наборе.", muted=True), False, False, 0)
         keyboard = _button("Настройки клавиатуры", self._open_keyboard)
         keyboard.set_halign(Gtk.Align.START)
         instructions.pack_start(keyboard, False, False, 0)
@@ -272,13 +274,23 @@ class Preferences(Gtk.Window):
             self.message.set_text("Пауза снята.")
 
     def _refresh_status(self):
-        if not self.settings.enabled:
+        if self.setup_pending:
+            self.status.set_text("Загружаем метод ввода. Это займёт несколько секунд…")
+            self.setup_button.set_sensitive(False)
+            return
+        from .desktop import status
+        activation = status()
+        if not activation.ready:
+            self.status.set_text(activation.message)
+        elif not self.settings.enabled:
             self.status.set_text("Фильтр выключен. Включите его и сохраните настройки.")
         elif self.settings.paused_until > time.time():
             until = time.strftime("%H:%M", time.localtime(self.settings.paused_until))
             self.status.set_text(f"Пауза до {until}. Затем фильтр продолжит работу.")
         else:
-            self.status.set_text("Фильтр включён для источников ввода «Тише EN» и «Тише RU».")
+            self.status.set_text("Активен источник Тише. Фильтр работает в фоне; окно настроек можно закрыть.")
+        self.setup_button.set_sensitive(True)
+        self.setup_button.set_visible(not activation.ready or not self.settings.enabled)
         self.resume_button.set_sensitive(self.settings.paused_until > time.time())
 
     def _update_status(self):
@@ -296,13 +308,33 @@ class Preferences(Gtk.Window):
         except OSError:
             self.message.set_text("Откройте настройки системы → Клавиатура → Источники ввода.")
 
-    def _enable_sources(self, _button=None):
+    def _activate(self, _button=None):
+        if self.setup_pending:
+            return
+        self.enabled.set_active(True)
+        if not self._persist(paused_until=0):
+            return
         try:
-            from .desktop import enable
-            enable()
-            self.message.set_text("Источники добавлены. Выберите Тише через Super+Space.")
-        except (OSError, RuntimeError, GLib.Error) as error:
+            entry = str(Path(__file__).resolve().parent.parent / "run.py")
+            process = Gio.Subprocess.new([sys.executable, entry, "enable"],
+                                         Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE)
+            self.setup_pending = True
+            self._refresh_status()
+            process.communicate_utf8_async(None, None, self._activation_finished)
+        except (OSError, GLib.Error) as error:
             self.message.set_text(str(error))
+
+    def _activation_finished(self, process, result):
+        self.setup_pending = False
+        try:
+            _ok, output, error = process.communicate_utf8_finish(result)
+            if process.get_successful():
+                self.message.set_text("Источники настроены. Текущий статус показан выше. Super+Space — сменить язык.")
+            else:
+                self.message.set_text((error or output or "Не удалось включить фильтр.").strip())
+        except GLib.Error as error:
+            self.message.set_text(str(error))
+        self._refresh_status()
 
     def _open_dictionaries(self, _button=None):
         directory = self.config.wordlist_dir()
