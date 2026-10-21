@@ -5,6 +5,7 @@ on focus loss; unsafe ones must use CLEAR. No backspace injection is required.
 """
 
 from dataclasses import dataclass
+from bisect import bisect_left
 import time
 import unicodedata
 
@@ -27,6 +28,7 @@ def allow_key(text: str) -> str:
 class Matcher:
     def __init__(self, settings: Settings, wordlists=None):
         self.allowed = {allow_key(word) for word in settings.allow_words}
+        self._allowed_ordered = sorted(self.allowed)
         self.builtin = Detector(filter_en=settings.filter_en, filter_ru=settings.filter_ru,
                                 allow_words=settings.allow_words, extra_words=settings.extra_words)
         self.wordlists = wordlists
@@ -35,6 +37,17 @@ class Matcher:
         if allow_key(text) in self.allowed:
             return None
         return self.builtin.detect(text) or (self.wordlists.detect(text) if self.wordlists else None)
+
+    def allows_completion(self, text: str) -> bool:
+        """An explicit whole-word exception may be completed before judging it.
+
+        Binary search avoids a second large prefix dictionary in memory. The
+        completed-word check still rejects a prohibited standalone prefix.
+        """
+        key = allow_key(text)
+        position = bisect_left(self._allowed_ordered, key)
+        return (bool(key) and position < len(self._allowed_ordered)
+                and self._allowed_ordered[position].startswith(key))
 
 
 class Cooldown:

@@ -87,8 +87,10 @@ def install():
     if source != destination:
         shutil.copytree(source / "mute_profanity", destination / "mute_profanity",
                         dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-        for name in ("run.py", "README.md", "VERIFICATION.md", "LICENSE"):
+        for name in ("run.py", "README.md", "LICENSE"):
             shutil.copy2(source / name, destination / name)
+        if (source / "VERIFICATION.md").is_file():
+            shutil.copy2(source / "VERIFICATION.md", destination / "VERIFICATION.md")
         shutil.copytree(source / "assets", destination / "assets", dirs_exist_ok=True)
     locations["icon"].parent.mkdir(parents=True, exist_ok=True)
     icon_source = source / "assets/mute-profanity.svg"
@@ -97,6 +99,8 @@ def install():
     if icon_source != locations["icon"]:
         shutil.copy2(icon_source, locations["icon"])
     write(locations["component"], component_xml(destination / "run.py", locations["icon"]))
+    from .gnome_modal import prepare_extension
+    prepare_extension(destination / "run.py")
     write(locations["dropin"], dropin_text(locations["component"].parent))
     write(locations["desktop"], f'''[Desktop Entry]
 Type=Application
@@ -115,6 +119,7 @@ StartupNotify=true
     print("Откройте настройки и нажмите «Запустить фильтр в фоне».")
     print(f"Или выполните: /usr/bin/python3 {shlex.quote(str(destination / 'run.py'))} enable")
     print("Активация загрузит Тише и заменит обычные US/RU; другие раскладки сохранятся.")
+    print("Для блокировки всего рабочего стола GNOME один раз выйдите и войдите в сеанс после активации.")
     if result.returncode:
         print("Шина сеанса недоступна. Выполните активацию из своего сеанса GNOME.")
     return 0
@@ -125,6 +130,8 @@ def uninstall():
     # installed, so the user's selected keyboard cannot point at missing code.
     from .desktop import disable
     disable()
+    from .gnome_modal import remove_extension
+    remove_extension()
     locations = paths()
     for key in ("component", "desktop", "icon", "dropin"):
         locations[key].unlink(missing_ok=True)

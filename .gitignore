@@ -2,3 +2,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .coverage
+build/
+dist/
+release/
+*.spec

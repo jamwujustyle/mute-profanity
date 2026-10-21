@@ -138,7 +138,7 @@ class WordLists:
                 if path.is_symlink():
                     errors.append(f"{path.name}: symbolic links are skipped.")
                     continue
-                flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+                flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
                 flags |= getattr(os, "O_NOFOLLOW", 0)
                 descriptor = os.open(path, flags)
                 with os.fdopen(descriptor, "rb") as source:

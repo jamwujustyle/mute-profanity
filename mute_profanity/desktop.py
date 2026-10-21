@@ -11,6 +11,7 @@ gi.require_version("IBus", "1.0")
 from gi.repository import Gio, GLib, IBus
 
 from .install import SERVICE, paths
+from .gnome_modal import request_enable, is_available
 
 SOURCES = (("ibus", "mute-en"), ("ibus", "mute-ru"))
 NATIVE_SOURCES = (("xkb", "us"), ("xkb", "ru"))
@@ -148,8 +149,11 @@ def _update_sources(*, enable: bool):
 def enable():
     _ready_bus()
     _update_sources(enable=True)
+    modal_ready = request_enable()
     print("Русский и English подключены через Тише; порядок и остальные раскладки сохранены.")
     print("Super+Space — сменить язык. Ctrl+Shift+F12 — пауза на пять минут.")
+    if not modal_ready:
+        print("Full desktop cooldown: sign out and back in once to load the GNOME extension.")
     return 0
 
 
@@ -215,6 +219,7 @@ def doctor():
     print(f"Источники GNOME: {list(state.sources)}")
     print(f"Текущий метод IBus: {state.global_engine or 'недоступен'}")
     print(f"Состояние ({state.code}): {state.message}")
+    print(f"Full desktop cooldown: {'ready' if is_available() else 'pending GNOME extension login'}")
     print("Ввод конкретного приложения нужно проверить отдельно; наличие настроек не подтверждает фильтрацию.")
     return 0 if state.ready else 1
 

@@ -28,6 +28,18 @@ def activation_status(*, ready=False):
     )
 
 
+class InstantTriggerConfiguration(unittest.TestCase):
+    def test_legacy_settings_enable_immediate_reaction_by_default(self):
+        from mute_profanity import config
+
+        with tempfile.TemporaryDirectory(prefix="mute-legacy-config-") as directory:
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": directory}):
+                config.config_path().parent.mkdir(parents=True)
+                config.config_path().write_text('{"enabled": true}\n', encoding="utf-8")
+                self.assertTrue(config.load().instant_trigger)
+                self.assertTrue(config.validated({"instant_trigger": "false"}).instant_trigger)
+
+
 @unittest.skipUnless(os.environ.get("MUTE_GTK_TEST") == "1", "Run tools/test-ui.sh for isolated GTK checks")
 class PreferencesActivation(unittest.TestCase):
     @classmethod
@@ -107,6 +119,24 @@ class PreferencesActivation(unittest.TestCase):
                 self.window.get_allocated_height())
             pixbuf.savev(str(Path(screenshot)), "png", [], [])
 
+    def test_immediate_reaction_defaults_to_on_and_is_saved(self):
+        self.assertTrue(self.window.instant_trigger.get_active())
+        self.window._save()
+        self.assertTrue(self.config.load().instant_trigger)
+
+    def test_completed_word_mode_survives_save_and_reopen(self):
+        self.window.instant_trigger.set_active(False)
+        self.window._save()
+        self.assertFalse(self.config.load().instant_trigger)
+        self.window.destroy()
+        self.window = self.ui.Preferences()
+        self.window.show_all()
+        self.drain()
+        self.assertFalse(self.window.instant_trigger.get_active())
+        self.window.instant_trigger.set_active(True)
+        self.window._save()
+        self.assertTrue(self.config.load().instant_trigger)
+
     def test_active_source_reports_background_operation(self):
         self.status_mock.return_value = activation_status(ready=True)
         self.window._refresh_status()
@@ -147,6 +177,37 @@ class PreferencesActivation(unittest.TestCase):
         self.assertEqual(self.window.status.get_text(), self.status_mock.return_value.message)
         self.assertTrue(self.window.setup_button.get_visible())
         self.assertTrue(self.window.setup_button.get_sensitive())
+
+    def test_cooldown_is_english_and_closes_at_deadline(self):
+        popup = self.ui.Intervention(0.4)
+        self.addCleanup(lambda: None if popup.closed else popup.destroy())
+        popup.show_all()
+        self.drain()
+        self.assertEqual(popup.get_title(), "Watch your language.")
+        self.assertIn("Try again in", popup.countdown.get_text())
+        self.assertFalse(popup.get_decorated())
+        screenshot = os.environ.get("MUTE_GTK_SCREENSHOT")
+        if screenshot:
+            rendered = time.monotonic() + 0.08
+            self.wait_for(lambda: time.monotonic() >= rendered, "the fullscreen frame to render")
+            pixbuf = self.ui.Gdk.pixbuf_get_from_window(
+                popup.get_window(), 0, 0, popup.get_allocated_width(), popup.get_allocated_height())
+            pixbuf.savev(str(Path(screenshot).with_name("mute-cooldown-fullscreen.png")), "png", [], [])
+        self.wait_for(lambda: popup.closed, "automatic cooldown dismissal")
+        self.assertIsNone(popup.grabbed_seat)
+
+    def test_cooldown_ignores_escape_and_allows_emergency_pause(self):
+        popup = self.ui.Intervention(10)
+        self.addCleanup(lambda: None if popup.closed else popup.destroy())
+        popup.show_all()
+        self.drain()
+        popup._key_press(popup, SimpleNamespace(keyval=self.ui.Gdk.KEY_Escape, state=0))
+        self.assertFalse(popup.closed)
+        modifiers = self.ui.Gdk.ModifierType.CONTROL_MASK | self.ui.Gdk.ModifierType.SHIFT_MASK
+        popup._key_press(popup, SimpleNamespace(keyval=self.ui.Gdk.KEY_F12, state=modifiers))
+        self.assertTrue(popup.closed)
+        self.assertGreater(self.config.load().paused_until, time.time() + 290)
+        self.assertIsNone(popup.grabbed_seat)
 
 
 if __name__ == "__main__":

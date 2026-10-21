@@ -6,9 +6,12 @@ import math
 import os
 from pathlib import Path
 import tempfile
+import sys
 
 
 def config_dir() -> Path:
+    if sys.platform == "win32" and not os.environ.get("XDG_CONFIG_HOME"):
+        return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "Mute"
     return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "mute-profanity"
 
 
@@ -31,6 +34,7 @@ class Settings:
     allow_words: list[str] = field(default_factory=list)
     extra_words: list[str] = field(default_factory=list)
     paused_until: float = 0.0
+    instant_trigger: bool = True
 
 
 def _words(value: object) -> list[str]:
@@ -43,7 +47,7 @@ def _words(value: object) -> list[str]:
 def validated(data: dict) -> Settings:
     defaults = Settings()
     flags = {key: data[key] if isinstance(data.get(key), bool) else getattr(defaults, key)
-             for key in ("enabled", "escalate", "filter_en", "filter_ru", "beep")}
+             for key in ("enabled", "instant_trigger", "escalate", "filter_en", "filter_ru", "beep")}
     seconds = data.get("cooldown_seconds", 8)
     if isinstance(seconds, bool) or not isinstance(seconds, int):
         seconds = 8

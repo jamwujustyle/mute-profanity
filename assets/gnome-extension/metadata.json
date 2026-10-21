@@ -1,0 +1,7 @@
+{
+  "uuid": "mute-profanity@local",
+  "name": "Mute Profanity Cooldown",
+  "description": "A local, temporary desktop cooldown for the offline Mute profanity filter.",
+  "shell-version": ["46"],
+  "version": 1
+}

@@ -7,6 +7,7 @@ No window, keyboard device or normal user input is used.
 
 from __future__ import annotations
 
+from dataclasses import replace
 import os
 from pathlib import Path
 import sys
@@ -119,7 +120,9 @@ class IBusIntegration(unittest.TestCase):
             lambda source, response: source.call_finish(response))
 
     def setUp(self):
-        self.config.save(self.config.Settings(beep=False))
+        # Retain explicit coverage for the optional word-boundary mode even
+        # though new installations use the immediate reaction by default.
+        self.config.save(self.config.Settings(instant_trigger=False, beep=False))
         self.runtime.reload()
         self.runtime.cooldown.cancel()
         self.runtime.cooldown.strikes = 0
@@ -173,6 +176,118 @@ class IBusIntegration(unittest.TestCase):
         for character in text:
             keyval = (0x01000000 | ord(character)) if unicode_keyvals else self.IBus.unicode_to_keyval(character)
             self.assertTrue(self.press(keyval), "The engine should hold ordinary word characters")
+
+    def immediate(self, **settings):
+        self.config.save(replace(self.config.load(), instant_trigger=True, **settings))
+        self.runtime.reload()
+
+    def test_immediate_russian_rejects_final_letter_without_space(self):
+        self.immediate()
+        self.switch("mute-ru")
+        self.type_text("су", unicode_keyvals=True)
+        self.assertEqual(self.engine.composition.text, "су")
+        self.assertEqual(self.runtime.cooldown.remaining(), 0)
+        self.type_text("к", unicode_keyvals=True)
+        self.assertEqual(self.engine.composition.text, "сук")
+        self.assertEqual(self.runtime.cooldown.remaining(), 0)
+        self.type_text("а", unicode_keyvals=True)
+        self.assertEqual(self.engine.composition.text, "")
+        self.assertGreater(self.runtime.cooldown.remaining(), 0)
+        self.assertEqual(self.runtime.cooldown.strikes, 1)
+        self.assertEqual(self.commits, [])
+
+    def test_immediate_english_rejects_final_letter_and_shares_cooldown(self):
+        self.immediate()
+        original = self.engine
+        self.type_text("fuc")
+        self.assertEqual(self.engine.composition.text, "fuc")
+        self.assertEqual(self.runtime.cooldown.remaining(), 0)
+        self.type_text("k")
+        self.assertEqual(self.engine.composition.text, "")
+        self.assertGreater(self.runtime.cooldown.remaining(), 0)
+        self.assertEqual(self.commits, [])
+        self.switch("mute-ru")
+        self.assertIsNot(self.engine, original)
+        self.assertIs(self.engine.runtime.cooldown, original.runtime.cooldown)
+        self.assertTrue(self.press(0x01000000 | ord("я")))
+        self.assertTrue(self.press(self.IBus.KEY_Return))
+        self.assertEqual(self.engine.composition.text, "")
+        self.assertEqual(self.commits, [])
+
+    def test_immediate_custom_language_word_reloads_and_blocks_on_last_letter(self):
+        self.immediate()
+        path = self.config.wordlist_dir() / "el-immediate-test.txt"
+        try:
+            path.write_text("βρισιά\n", encoding="utf-8")
+            self.wait_for(lambda: bool(self.engine.composition.matcher.detect("βρισιά")),
+                          "automatic custom-language word-list reload")
+            self.type_text("βρισι", unicode_keyvals=True)
+            self.assertEqual(self.engine.composition.text, "βρισι")
+            self.assertEqual(self.runtime.cooldown.remaining(), 0)
+            self.type_text("ά", unicode_keyvals=True)
+            self.assertEqual(self.engine.composition.text, "")
+            self.assertGreater(self.runtime.cooldown.remaining(), 0)
+            self.assertEqual(self.commits, [])
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_immediate_composed_accent_uses_custom_word_filter(self):
+        self.immediate()
+        path = self.config.wordlist_dir() / "fr-immediate-test.txt"
+        try:
+            path.write_text("café\n", encoding="utf-8")
+            self.wait_for(lambda: bool(self.engine.composition.matcher.detect("café")),
+                          "the accented custom word")
+            self.type_text("caf")
+            self.assertTrue(self.press(0xFE51))  # dead_acute
+            self.assertEqual(self.engine.composition.text, "caf")
+            self.assertEqual(self.runtime.cooldown.remaining(), 0)
+            self.assertTrue(self.press(ord("e")))
+            self.assertEqual(self.engine.composition.text, "")
+            self.assertGreater(self.runtime.cooldown.remaining(), 0)
+            self.assertEqual(self.commits, [])
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_immediate_backspace_rechecks_a_word_after_dictionary_reload(self):
+        self.immediate()
+        self.type_text("novelx")
+        path = self.config.wordlist_dir() / "xx-backspace-test.txt"
+        try:
+            path.write_text("novel\n", encoding="utf-8")
+            self.wait_for(lambda: bool(self.engine.composition.matcher.detect("novel")),
+                          "the new exact custom word")
+            self.assertEqual(self.engine.composition.text, "novelx")
+            self.assertEqual(self.runtime.cooldown.remaining(), 0)
+            self.assertTrue(self.press(self.IBus.KEY_BackSpace))
+            self.assertEqual(self.engine.composition.text, "")
+            self.assertGreater(self.runtime.cooldown.remaining(), 0)
+            self.assertEqual(self.commits, [])
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_immediate_allow_word_defers_prefix_but_standalone_word_is_rejected(self):
+        self.immediate(allow_words=["assembly"])
+        self.type_text("ass")
+        self.assertEqual(self.engine.composition.text, "ass")
+        self.assertEqual(self.runtime.cooldown.remaining(), 0)
+        self.type_text("embly")
+        self.assertEqual(self.engine.composition.text, "assembly")
+        self.assertEqual(self.runtime.cooldown.remaining(), 0)
+        self.assertFalse(self.press(self.IBus.KEY_space))
+        self.wait_for(lambda: bool(self.commits), "the complete allowed word")
+        self.assertEqual(self.commits, ["assembly"])
+        self.commits.clear()
+        self.type_text("ass")
+        self.assertEqual(self.runtime.cooldown.remaining(), 0)
+        self.assertTrue(self.press(self.IBus.KEY_space))
+        self.assertEqual(self.engine.composition.text, "")
+        self.assertGreater(self.runtime.cooldown.remaining(), 0)
+        self.assertEqual(self.commits, [])
+
+    def test_immediate_mode_preserves_private_field_bypass(self):
+        self.immediate()
+        self.assert_private_bypass(self.IBus.InputPurpose.PASSWORD, 0)
 
     def test_safe_word_commits_only_on_space(self):
         self.type_text("hello")

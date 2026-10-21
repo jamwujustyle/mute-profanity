@@ -2,7 +2,6 @@
 
 from dataclasses import replace
 import math
-from pathlib import Path
 import signal
 import sys
 import time
@@ -16,6 +15,8 @@ from . import config
 from .core import Composition, Cooldown, Matcher
 from .compose import Composer, is_compose_start
 from .wordlists import WordLists
+from .launch import command
+from .gnome_modal import try_show, try_hide
 
 ENGINES = ("mute-en", "mute-ru")
 BUS_NAME = "org.freedesktop.IBus.MuteProfanity"
@@ -60,6 +61,7 @@ class Runtime:
         self.matcher = Matcher(self.settings, self.lists)
         if not self.settings.enabled or self.settings.paused_until > time.time():
             self.cooldown.cancel()
+            try_hide()
         for engine in tuple(self.engines):
             engine.composition.settings = self.settings
             engine.composition.matcher = self.matcher
@@ -71,6 +73,7 @@ class Runtime:
 
     def pause(self):
         self.cooldown.cancel()
+        try_hide()
         self.settings = replace(self.settings, paused_until=time.time() + 300)
         try:
             config.save(self.settings)
@@ -84,12 +87,13 @@ class Runtime:
             engine.update_auxiliary_text(IBus.Text.new_from_string("Пауза на 5 минут"), True)
 
     def intervene(self, seconds):
+        if self.popup and try_show(seconds):
+            return
         if not self.popup or self.popup_pid is not None:
             return
-        entry = str(Path(__file__).resolve().parent.parent / "run.py")
         try:
             pid, *_ = GLib.spawn_async(
-                [sys.executable, entry, "--intervention", str(seconds)],
+                command("--intervention", str(seconds)),
                 flags=GLib.SpawnFlags.DO_NOT_REAP_CHILD |
                       GLib.SpawnFlags.STDOUT_TO_DEV_NULL | GLib.SpawnFlags.STDERR_TO_DEV_NULL)
             self.popup_pid = pid
@@ -120,18 +124,31 @@ class MuteEngine(IBus.Engine):
         if self.composer is not None:
             self.composer.reset()
 
-    def show_composition(self):
+    def show_composition(self, *, unsafe=None):
         text = IBus.Text.new_from_string(self.composition.text)
         if self.composition.text:
             text.append_attribute(IBus.AttrType.UNDERLINE, IBus.AttrUnderline.SINGLE,
                                   0, len(self.composition.text))
-        mode = IBus.PreeditFocusMode.CLEAR if self.composition.unsafe() else IBus.PreeditFocusMode.COMMIT
+        if unsafe is None:
+            unsafe = self.composition.unsafe()
+        mode = IBus.PreeditFocusMode.CLEAR if unsafe else IBus.PreeditFocusMode.COMMIT
         self.update_preedit_text_with_mode(text, self.composition.cursor,
                                           bool(self.composition.text), mode)
 
+    def after_edit(self):
+        unsafe = self.composition.unsafe()
+        if (self.runtime.settings.instant_trigger and unsafe
+                and not self.runtime.matcher.allows_completion(self.composition.text)):
+            # Consume the matching character, clear preedit and start the same
+            # penalty path used at boundaries. No text is committed first.
+            self.finish()
+        else:
+            self.show_composition(unsafe=unsafe)
+
     def _feedback(self):
         remaining = self.runtime.cooldown.remaining()
-        message = f"Стоп. Переформулируйте. Осталось {math.ceil(remaining)} с."
+        count = math.ceil(remaining)
+        message = f"Watch your language. Try again in {count} {'second' if count == 1 else 'seconds'}."
         self.update_auxiliary_text(IBus.Text.new_from_string(message), remaining > 0)
         if remaining <= 0:
             self.tick_id = 0
@@ -212,7 +229,7 @@ class MuteEngine(IBus.Engine):
             return True
         if keyval == IBus.KEY_BackSpace and self.composition.text:
             self.composition.backspace()
-            self.show_composition()
+            self.after_edit()
             return True
         if keyval in (IBus.KEY_Delete, IBus.KEY_Left, IBus.KEY_Right, IBus.KEY_Home, IBus.KEY_End):
             # Accept a clean composition before native cursor/selection editing.
@@ -227,7 +244,7 @@ class MuteEngine(IBus.Engine):
                 if self.finish():
                     return True
                 self.composition.insert(char)
-            self.show_composition()
+            self.after_edit()
             return True
         # Space, Enter, Tab and navigation all
         # validate the pending word before the original event is forwarded.

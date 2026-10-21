@@ -1,187 +1,189 @@
-# Тише / Mute
+# Mute / Тише
 
-Лёгкий локальный фильтр набираемой брани для **Ubuntu 24.04 / GNOME / IBus**.
-Русский интерфейс, русский и английский словари, без ИИ, интернета, API,
-подписок и платных компонентов. Это нативный метод ввода, а не браузерный сервер.
+A small, offline Russian/English profanity guard for Windows and Ubuntu GNOME.
+No AI, account, API key, subscription, network connection, or paid service is
+needed at runtime. Settings can stay closed: the input guard runs separately.
 
-Текущее слово показывается как подчёркнутая композиция. Пробел, Enter, Tab или
-переход курсора проверяют его: обычное слово попадает в приложение, запрещённое
-удаляется из композиции, отправка отменяется и начинается пауза. По умолчанию
-паузы: **8 → 16 → 32 → 60 секунд** при повторных попытках в течение пяти минут.
-После пяти минут без срабатываний следующая пауза снова базовая.
-Появляется окно с обратным отсчётом; закрытие окна не отменяет паузу ввода.
+By default, a match triggers **immediately while typing**, clears the current
+word and starts an escalating **8 → 16 → 32 → 60 second** cooldown. The warning
+is in **English**. The desktop cooldown covers the monitors and blocks normal
+mouse/keyboard interaction until it expires. It releases automatically; it does
+not suspend the operating system or its background work.
 
-## Установка и запуск
+**Ctrl+Shift+F12** dismisses the cooldown and pauses filtering for five minutes.
+OS emergency controls remain available. After five minutes without another
+match, the next penalty returns to its base duration.
 
-В папке проекта:
+## Windows 10/11, 64-bit
+
+Use the portable `Mute-Windows-x64.zip` build, extract it, and open **Mute.exe**.
+Click **Start in background**, then close Settings. This installs the app for
+your user, adds a Start-menu shortcut and enables startup at sign-in. No Python
+installation or administrator rights are needed for the packaged executable.
+**Stop filtering** removes automatic startup and stops the hooks.
+
+To update, stop filtering and close the old Mute windows. Open the new download
+and click **Start in background**. Your settings and dictionaries are kept.
+
+The Windows backend uses native keyboard/mouse hooks and the active keyboard
+layout. It supports Russian/English input without switching to a special input
+method. The source launcher `start-windows.cmd` is also available when Python
+3.14, including Tk, is installed.
+
+Wine smoke tests do not replace testing on native Windows, elevated applications,
+multiple physical monitors and different keyboard layouts. See the limitations
+below and the build/verification notes.
+
+## Ubuntu 24.04 / GNOME 46
+
+Extract the Linux source ZIP and run **install-linux.sh**, or from this folder:
 
 ```bash
 /usr/bin/python3 run.py install
-```
-
-Установка выполняется **для текущего пользователя, без sudo**. Она копирует
-программу в каталог пользовательских приложений, добавляет ярлык «Тише / Mute»
-и настройку обнаружения IBus. Системные словари IBus сохраняются в пути поиска.
-
-Откройте **«Тише / Mute»** и нажмите **«Запустить фильтр в фоне»**.
-Или выполните:
-
-```bash
 /usr/bin/python3 run.py enable
 ```
 
-Активация загрузит метод ввода и заменит обычные источники **US/RU** на
-**«Тише EN — English»** и **«Тише RU — Русский»**, сохранив порядок и другие
-раскладки. Если текущий IBus ещё не обнаружил программу, команда один раз
-перезагрузит пользовательскую службу ввода. Выходить из сеанса не нужно.
-**Super+Space** продолжает переключать язык.
+Installation is per-user, without sudo. It replaces standard US/RU sources with
+**Тише EN** and **Тише RU**, preserving source order and other layouts.
+**Super+Space** still switches language. IBus starts the guard when its source
+is selected, including after login. Closing Settings does not stop it.
 
-После активации **закройте окно настроек**: оно не управляет временем жизни
-фильтра. IBus запускает процесс без окна, когда выбран источник «Тише», в том
-числе после нового входа в Ubuntu. Окно появляется только при срабатывании или
-когда вы сами открываете настройки. Статус вверху окна проверяет фактический
-источник ввода; сохранённый переключатель «включён» сам по себе не означает,
-что установка активирована.
+The GNOME companion provides the **whole-desktop input grab**. GNOME 46 cannot
+hot-load a newly installed local extension: **sign out and back in once** after
+activation. The installer stages and enables only this app's extension. It does
+not log you out, enable unsafe Shell evaluation or change the global switch for
+other extensions. If user extensions are disabled globally, enable this one in
+GNOME's Extensions settings before relying on whole-desktop blocking.
 
-Настройки: меню приложений → **Тише / Mute**, либо:
+Before the companion is loaded, filtering and the English full-screen GTK
+warning still work. On Wayland that fallback cannot guarantee a global input
+grab. On X11 it attempts a keyboard/pointer seat grab and releases it on expiry.
+Other Linux desktop environments and GNOME versions are not currently supported
+by the automatic installer.
+
+Open **Тише / Mute** to configure it. **Запустить фильтр в фоне** means “Start in
+background.” The top status distinguishes a saved enabled preference, a selected
+guarded source, and pending GNOME desktop blocking.
 
 ```bash
 /usr/bin/python3 run.py settings
 /usr/bin/python3 run.py doctor
-```
-
-**Ctrl+Shift+F12** в поле с активным «Тише» включает паузу на пять минут.
-В настройках доступны выключение, пауза, продолжение, длительность и нарастание
-паузы, звук, языки, дополнительные слова, исключения и локальная проверка слова.
-Пауза и выключение в настройках сохраняют выбранную раскладку и пропускают ввод.
-`run.py disable` возвращает обычные US/RU, сохраняя прочие раскладки.
-
-Нужны системные Python 3, PyGObject, GTK 3 и IBus. В стандартной Ubuntu Desktop
-они обычно установлены. Если `doctor` сообщает об отсутствии зависимости:
-
-```bash
-sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-ibus-1.0 ibus
-```
-
-На других окружениях рабочего стола установка через GNOME systemd unit не
-поддерживается. Установка копирует файлы и не меняет источник ввода до активации;
-активация при необходимости перезагружает службу IBus, не завершая сеанс.
-
-## Добавить язык или набор слов
-
-Откройте настройки → **«Добавить язык или свой словарь» → «Открыть словари»**.
-Создайте UTF-8 файл, например `es.txt`, и вставьте слова по одному на строке:
-
-```text
-# Комментарий: выдуманные слова для примера
-palabrota
-примеркорня*
-```
-
-Файлы `*.txt` из `~/.config/mute-profanity/wordlists/` загружаются автоматически,
-в том числе при изменении уже запущенной программы. Если задан `XDG_CONFIG_HOME`,
-используется его каталог `mute-profanity/wordlists/`.
-Имя файла — метка языка; правил может быть несколько файлов на любой язык.
-Новый словарь не требует изменения кода, установки пакетов или перезапуска.
-
-- Обычная строка означает целое слово, регистр не важен.
-- `*` только в конце включает совпадение по началу слова; минимум три символа.
-  Добавляйте его осторожно, чтобы не блокировать невинные продолжения.
-- Unicode NFKC и casefold обрабатывают регистр и совместимые формы символов;
-  акценты сохраняются. Готовый список не получает автоматически правила
-  склонения, транслитерации или намеренно искажённых написаний.
-- Пробелы внутри строк, регулярные выражения и фразы не поддерживаются.
-  Пустые строки и строки, начинающиеся с `#`, игнорируются.
-- До 1 MiB на файл, 50 000 записей суммарно, 128 символов на слово.
-  Неподходящие файлы пропускаются; `doctor` показывает диагностику.
-- Явное исключение в настройках имеет приоритет над словарями.
-
-Словари проверяются при обоих источниках «Тише», независимо от метки языка.
-Словарь добавляет проверку текста, а не новую раскладку клавиатуры: в этой версии
-источники имеют раскладки US и RU. Для языка с другой раскладкой потребуется
-добавить описание источника IBus; это отдельная задача от добавления слов.
-
-## Точность и ограничения
-
-**Измеренной точности 99% нет.** Встроенные правила покрывают основные русские
-корни с приставками/окончаниями, распространённую английскую брань и составные
-слова, транслитерацию, часть похожих букв, leetspeak, повторов и маскировок.
-Общие невинные слова проверены отдельными регрессиями. Контекст, цитирование и
-значение слова правила не понимают; ложные срабатывания возможны.
-
-Фильтр действует **при выбранном источнике «Тише» в приложениях с IBus**.
-Это не универсальная блокировка всей системы. Игры, приложения без IBus, другие
-источники ввода, вставка из буфера, голосовой ввод, уже существующий текст и
-редактирование ранее принятого слова могут обходить проверку. Раздельный набор
-букв через пробелы также не является гарантированно покрытым случаем.
-При выборе источника в реальном приложении проверьте слово в несохраняемом
-черновике: запрещённое слово с пробелом должно исчезнуть и запустить паузу.
-
-Клавиши навигации и сочетания сохраняют обычное поведение после проверки
-композиции. На потере фокуса IBus принимает безопасную композицию и очищает
-запрещённую; никаких искусственных Backspace по чужому тексту нет.
-Композиция ограничена 128 символами; длинные последовательности проверяются
-частями. Compose/dead-key последовательности собираются через системную
-libxkbcommon и затем проходят ту же проверку слов. Нестандартные клиенты требуют
-отдельной проверки на конкретном приложении.
-
-Поля, помеченные приложением как пароль, PIN или private, обходят фильтр.
-Приложения должны сообщать IBus эту метку: например, скрытый пароль в терминале
-может её не иметь. В таком поле временно используйте обычный источник.
-
-## Ресурсы и приватность
-
-Процесс блокируется в цикле событий GLib, когда вы не печатаете: нет опроса
-экрана, аудио, устройств или фоновых сетевых запросов. Словари компилируются
-один раз и перечитываются по событиям файловой системы. GTK-интерфейс работает
-отдельно и открывается только для настроек или срабатывания.
-
-Текст не записывается на диск и не отправляется куда-либо. Ввод хранится только
-в текущей композиции; после проверки/сброса она очищается. На диске остаются
-только ваши настройки и добавленные вами слова. «Пауза» сохраняет время
-окончания; история ругательств и статистика не сохраняются.
-
-Проверки и воспроизводимое измерение времени:
-
-```bash
-/usr/bin/python3 -m unittest discover -s tests -v
-/usr/bin/python3 tools/benchmark.py
-bash tools/test-ibus.sh
-bash tools/test-ui.sh
-```
-
-Проверка IBus использует отдельную временную D-Bus/IBus сессию. Она не меняет
-ваши источники ввода и не отправляет события в открытые приложения.
-Измерения текущей сборки находятся в [VERIFICATION.md](VERIFICATION.md).
-
-## Удаление
-
-```bash
+/usr/bin/python3 run.py pause
 /usr/bin/python3 run.py disable
 /usr/bin/python3 run.py uninstall
 ```
 
-Удаление сначала убирает ссылки на источники «Тише», затем программные файлы
-и пользовательскую настройку IBus. Обычные раскладки остаются; словари и
-настройки сохраняются. После удаления выйдите из сеанса и войдите снова.
+`disable` restores ordinary US/RU sources and leaves other layouts in place.
+Uninstall keeps your dictionaries and settings. If the system libraries are
+missing, Ubuntu's packages are `python3-gi`, `gir1.2-gtk-3.0`,
+`gir1.2-ibus-1.0` and `ibus`.
 
-## English
+## Immediate feedback and exceptions
 
-Mute is an **extensible**, offline Russian/English profanity input method for
-Ubuntu GNOME. It checks a pending word before committing it and applies an
-escalating cooldown. It uses existing IBus/GTK libraries and no AI or paid API.
-Add UTF-8 `*.txt` files with one word per line through the dictionary folder in
-Settings. Exact words are the default; a trailing `*` enables prefix matching.
+**React immediately / Мгновенная реакция** is on by default. The trigger happens
+on the character that first makes the pending text match, before Space, Enter
+or Send. Turning it off restores checking at word completion. Both modes block
+matched input before the guard commits it; pasting and editing existing text
+have separate limitations.
 
-Install with `/usr/bin/python3 run.py install`, then open the app and click
-**Запустить фильтр в фоне**, or run `/usr/bin/python3 run.py enable`.
-Activation loads the engine and replaces ordinary US/RU sources with
-**Тише EN/RU**, preserving other layouts. Close the settings window afterward:
-IBus runs the filter independently, including after your next login.
-Super+Space switches language; Ctrl+Shift+F12 pauses for five minutes.
-Coverage depends on the application
-using IBus and the selected input source; no measured 99% guarantee is claimed.
+Immediate mode is deliberately stricter. For example, a prohibited `ass` prefix
+can interrupt `assembly` before the rest of the word has been typed. Add the
+**full innocent word** to Allowed words, or turn immediate mode off. While input
+is a prefix of an explicit exception, the instant penalty waits; a prohibited
+standalone prefix is still rejected at the word boundary. The app cannot infer
+which longer word you intended to type.
 
-Implementation references: [IBus engine API](https://ibus.github.io/docs/ibus-1.5/IBusEngine.html),
-[IBus component registry](https://github.com/ibus/ibus/blob/1.5.29/src/ibusregistry.c),
-[GNOME IBus integration](https://gitlab.gnome.org/GNOME/gnome-shell/-/blob/gnome-46/js/misc/ibusManager.js).
+Settings also control the base cooldown, escalation, warning sound, Russian and
+English rules, allowed words and your additional prohibited words. On Windows,
+pause filtering before entering prohibited vocabulary in the Settings editors.
+
+## Extensible dictionaries
+
+Open **Open dictionary folder / Открыть словари** and drop in a UTF-8 `*.txt`
+file, such as `es.txt`. Use one word per line:
+
+```text
+# Invented examples, not a required vocabulary
+exampleword
+examplestem*
+```
+
+- A plain entry matches a whole word, ignoring case.
+- A trailing `*` explicitly enables prefix matching; at least three characters
+  must precede it. Avoid broad stems that also start innocent words.
+- Blank lines and full-line `#` comments are ignored. Phrases and regular
+  expressions are not supported.
+- Unicode normalization/case folding preserves accents. A new word list does
+  not automatically gain language-specific inflection or transliteration rules.
+- Limits: 1 MiB/file, 50,000 entries total, 128 characters/word. Symlinks and
+  unsuitable files are skipped; diagnostics identify files/lines, not typed text.
+- Explicit allowed words take priority. Built-in RU/EN language toggles do not
+  disable an independently added dictionary.
+
+Linux watches dictionary changes. Windows refreshes them during typing and on
+settings updates; it does no idle polling. Default folders are:
+
+- Linux: `~/.config/mute-profanity/wordlists/`
+- Windows: `%LOCALAPPDATA%\Mute\wordlists\`
+
+`XDG_CONFIG_HOME` overrides the configuration root when explicitly set.
+Dictionaries are checked independently of the filename's language label. Adding
+words needs no code changes. On Linux, adding a keyboard layout other than
+US/RU also needs an IBus engine descriptor; vocabulary and keyboard layout are
+separate concerns.
+
+## Coverage and privacy
+
+There is **no measured 99% detection guarantee**. Built-in rules cover common
+Russian roots/inflections, English profanity/compounds, transliteration and some
+confusables, repeats and masked spellings. They cannot understand context or
+intent. False positives and misses are possible, especially in immediate mode.
+
+Linux filtering requires an IBus-compatible application and a selected guarded
+source. Clipboard input, voice input, other sources, games without IBus and
+editing already committed text can bypass it. Space-separated spelling is not
+guaranteed to be caught. Password/PIN/private fields marked by the application
+bypass detection; terminal passwords may not expose that label.
+
+Windows suppresses the matching key and removes only a known, contiguous prefix
+in the same focused control. Focus changes, mouse editing, shortcuts, uncertain
+translations and IME input invalidate that tracking. Paste, application text
+transformations and elevated/protected applications are not guaranteed to be
+covered. Native Win32 password Edit controls are bypassed; browser/custom
+password fields cannot reliably be identified through these hooks. Pause the
+guard for sensitive fields whose behavior has not been verified.
+
+Typed text is never logged, saved or transmitted. Only the current bounded word
+is retained and cleared after checking/reset. Saved files contain your settings
+and explicitly added vocabulary. No swearing history or statistics are stored.
+Idle runtimes block in native event loops. Countdown timers exist only while a
+warning is visible; settings windows have their own short-lived status refresh.
+
+## Building and checks
+
+See [BUILDING.md](BUILDING.md) for Windows executable and Linux ZIP packaging.
+The repository's [VERIFICATION.md](VERIFICATION.md) records observed results and
+limits; it is not required to run a release package.
+
+```bash
+/usr/bin/python3 -m unittest discover -s tests -v
+bash tools/test-ibus.sh
+bash tools/test-ui.sh
+bash tools/test-gnome.sh
+/usr/bin/python3 tools/benchmark.py
+/usr/bin/python3 tools/measure-idle.py
+```
+
+Display/session integration checks use temporary buses and displays. They do
+not type into your messages or change ordinary desktop input sources.
+
+## Кратко по-русски
+
+Окно настроек можно закрыть: фильтр работает отдельно в фоне. По умолчанию он
+реагирует сразу при совпадении, без пробела и Enter. Предупреждение — на
+английском, с отсчётом и автоматическим снятием блокировки. Ctrl+Shift+F12
+закрывает предупреждение и ставит фильтр на паузу на пять минут.
+
+В GNOME 46 один раз выйдите и войдите в сеанс после установки: это необходимо
+для загрузки расширения, блокирующего ввод на всём рабочем столе. Словари можно
+добавлять обычными UTF-8 файлами, по одному слову на строке.

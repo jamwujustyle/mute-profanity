@@ -74,6 +74,7 @@ class DesktopTests(unittest.TestCase):
         stack.enter_context(patch.object(desktop.IBus, "init"))
         factory = stack.enter_context(patch.object(desktop.IBus.Bus, "new", return_value=bus))
         stack.enter_context(patch.object(desktop.Gio.Settings, "sync"))
+        stack.enter_context(patch.object(desktop, "request_enable", return_value=False))
         return stack, factory
 
     def test_enable_replaces_standard_layouts_deduplicates_and_keeps_others(self):

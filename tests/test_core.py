@@ -75,6 +75,14 @@ class TypingTests(unittest.TestCase):
             self.assertIsNone(Matcher(settings, lists).detect("palabrota!"))
             self.assertIsNone(Matcher(settings, lists).detect("«palabrota»"))
 
+    def test_instant_mode_can_finish_an_explicit_exception_prefix(self):
+        matcher = Matcher(replace(self.settings, allow_words=["assembly", "assist"]))
+        self.assertIsNotNone(matcher.detect("ass"))
+        self.assertTrue(matcher.allows_completion("ass"))
+        self.assertFalse(matcher.allows_completion("asshole"))
+        self.assertIsNone(matcher.detect("assembly"))
+        self.assertIsNotNone(matcher.detect("ass!"))
+
 
 class SettingsTests(unittest.TestCase):
     def test_settings_roundtrip_and_bad_json_defaults(self):
