@@ -16,12 +16,20 @@ def ui_main(arguments):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Mute — offline Russian/English profanity filter")
+    parser = argparse.ArgumentParser(prog="Mute.exe" if sys.platform == "win32" else "profanity",
+                                     description="Mute — offline Russian/English profanity filter")
     parser.add_argument("command", nargs="?", default="settings",
-                        choices=("settings", "engine", "doctor", "enable", "disable", "install", "uninstall", "pause"))
+                        choices=("settings", "engine", "doctor", "enable", "disable", "install", "uninstall", "pause",
+                                 "on", "off", "status"))
     parser.add_argument("--ibus", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--intervention", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    if args.command in ("on", "enable", "off", "disable"):
+        from mute_profanity.cli import switch
+        return switch(args.command in ("on", "enable"))
+    if args.command == "status":
+        from mute_profanity.cli import status
+        return status()
     if args.command == "pause":
         from mute_profanity import config
         config.save(replace(config.load(), paused_until=time.time() + 300))
@@ -31,6 +39,7 @@ def main(argv=None):
         else:
             from mute_profanity.gnome_modal import try_hide
             try_hide()
+        print("Profanity filter: paused for 5 minutes")
         return 0
     if args.intervention is not None:
         return ui_main(["--intervention", str(args.intervention)])
@@ -52,7 +61,7 @@ def main(argv=None):
     try:
         return ui_main([])
     except (ImportError, ValueError) as error:
-        print(f"Нужны системные GTK/IBus: {error}", file=sys.stderr)
+        print(f"Mute could not open Settings: {error}", file=sys.stderr)
         return 1
 
 

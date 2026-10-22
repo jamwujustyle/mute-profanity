@@ -1,4 +1,5 @@
-from contextlib import ExitStack
+from contextlib import ExitStack, redirect_stdout
+import io
 from pathlib import Path
 import subprocess
 import tempfile
@@ -76,6 +77,33 @@ class DesktopTests(unittest.TestCase):
         stack.enter_context(patch.object(desktop.Gio.Settings, "sync"))
         stack.enter_context(patch.object(desktop, "request_enable", return_value=False))
         return stack, factory
+
+    def test_enable_disable_terminal_messages_are_english(self):
+        self.setup_desktop(Settings(list(desktop.NATIVE_SOURCES)), Bus())
+        for operation in (desktop.enable, desktop.disable):
+            with self.subTest(operation=operation.__name__):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(operation(), 0)
+                self.assertIn("Mute", output.getvalue())
+                self.assertNotRegex(output.getvalue(), r"[А-Яа-яЁё]")
+
+    def test_doctor_uses_english_status_without_changing_the_gui_message(self):
+        from mute_profanity import config
+
+        state = desktop.Status("requires_setup", "Фильтр ещё не подключён.")
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(config, "wordlist_dir", return_value=Path(directory)), \
+             patch.object(desktop, "paths", return_value={
+                 key: Path(directory, key) for key in ("component", "dropin", "desktop")}), \
+             patch.object(desktop, "status", return_value=state), \
+             patch.object(desktop, "is_available", return_value=False), \
+             redirect_stdout(output):
+            self.assertEqual(desktop.doctor(), 1)
+        self.assertIn("Status (requires_setup): The filter is not connected", output.getvalue())
+        self.assertNotIn(state.message, output.getvalue())
+        self.assertEqual(state.message, "Фильтр ещё не подключён.")
 
     def test_enable_replaces_standard_layouts_deduplicates_and_keeps_others(self):
         settings = Settings([("xkb", "ru"), ("xkb", "us"), ("ibus", "mute-ru"),

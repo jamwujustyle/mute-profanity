@@ -1,3 +1,5 @@
+from contextlib import redirect_stdout
+import io
 import os
 from pathlib import Path
 import tempfile
@@ -20,10 +22,12 @@ class InstallTests(unittest.TestCase):
                          ["/usr/bin/python3", "/tmp/Mute's App/run.py", "engine", "--ibus"])
 
     def test_install_stages_complete_app_without_affecting_host(self):
+        output = io.StringIO()
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
             "XDG_DATA_HOME": str(Path(directory, "data")),
             "XDG_CONFIG_HOME": str(Path(directory, "config")),
-        }), patch.object(install.subprocess, "run") as run:
+        }), patch.object(install.Path, "home", return_value=Path(directory)), \
+             patch.object(install.subprocess, "run") as run, redirect_stdout(output):
             run.return_value.returncode = 0
             self.assertEqual(install.install(), 0)
             locations = install.paths()
@@ -33,11 +37,15 @@ class InstallTests(unittest.TestCase):
             self.assertIn("--cache none", locations["dropin"].read_text())
             self.assertIn("Тише", locations["desktop"].read_text())
             self.assertTrue(locations["icon"].is_file())
+            self.assertTrue(locations["cli"].stat().st_mode & 0o111)
+            self.assertIn(install.CLI_MARKER, locations["cli"].read_text())
             import gi
             gi.require_version("IBus", "1.0")
             from gi.repository import IBus
             component = IBus.Component.new_from_file(str(locations["component"]))
             self.assertEqual([e.get_name() for e in component.get_engines()], ["mute-en", "mute-ru"])
+        self.assertIn("Mute is installed", output.getvalue())
+        self.assertNotRegex(output.getvalue(), r"[А-Яа-яЁё]")
 
 
 if __name__ == "__main__":

@@ -65,6 +65,19 @@ Open **Тише / Mute** to configure it. **Запустить фильтр в �
 background.” The top status distinguishes a saved enabled preference, a selected
 guarded source, and pending GNOME desktop blocking.
 
+The installer adds these terminal commands; their output is in English:
+
+```bash
+profanity off       # stop filtering and restore ordinary US/RU sources
+profanity on        # enable filtering and clear any temporary pause
+profanity status    # show whether the input guard is active
+profanity pause     # pause for five minutes
+profanity settings  # open Settings
+```
+
+Running `profanity` without arguments shows status. If a terminal has not picked
+up the command yet, use `~/.local/bin/profanity` or open a new terminal.
+
 ```bash
 /usr/bin/python3 run.py settings
 /usr/bin/python3 run.py doctor

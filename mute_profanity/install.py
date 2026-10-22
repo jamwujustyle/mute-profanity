@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 from . import __version__
 
 SERVICE = "org.freedesktop.IBus.session.GNOME.service"
+CLI_MARKER = "# Managed by Mute: profanity command"
 
 
 def paths():
@@ -22,6 +23,7 @@ def paths():
         "desktop": data / "applications/mute-profanity.desktop",
         "icon": data / "icons/hicolor/scalable/apps/mute-profanity.svg",
         "dropin": conf / f"systemd/user/{SERVICE}.d/60-mute-profanity.conf",
+        "cli": Path.home() / ".local/bin/profanity",
     }
 
 
@@ -72,6 +74,17 @@ def write(path: Path, text: str):
     path.write_text(text, encoding="utf-8")
 
 
+def install_cli(entry: Path, target: Path):
+    if target.is_symlink() or (target.exists() and CLI_MARKER not in target.read_text(encoding="utf-8")):
+        raise ValueError(f"Another command already exists at {target}; it has not been replaced")
+    write(target, f'''#!/bin/sh
+{CLI_MARKER}
+if [ "$#" -eq 0 ]; then set -- status; fi
+exec /usr/bin/python3 {shlex.quote(str(entry))} "$@"
+''')
+    target.chmod(0o755)
+
+
 def install():
     import gi
     gi.require_version("IBus", "1.0")
@@ -81,7 +94,7 @@ def install():
     locations = paths()
     for path in locations.values():
         if any(char in str(path) for char in ("\n", "\r", "\x00", ":")):
-            raise ValueError("Путь установки содержит неподдерживаемые символы")
+            raise ValueError("The installation path contains unsupported characters.")
     destination = locations["app"]
     destination.mkdir(parents=True, exist_ok=True)
     if source != destination:
@@ -114,14 +127,15 @@ StartupNotify=true
 ''')
     from . import config
     config.wordlist_dir().mkdir(parents=True, exist_ok=True, mode=0o700)
+    install_cli(destination / "run.py", locations["cli"])
     result = subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-    print("Тише установлен для текущего пользователя. Настройки: меню приложений → Тише / Mute.")
-    print("Откройте настройки и нажмите «Запустить фильтр в фоне».")
-    print(f"Или выполните: /usr/bin/python3 {shlex.quote(str(destination / 'run.py'))} enable")
-    print("Активация загрузит Тише и заменит обычные US/RU; другие раскладки сохранятся.")
-    print("Для блокировки всего рабочего стола GNOME один раз выйдите и войдите в сеанс после активации.")
+    print("Mute is installed for the current user. Open Mute from the applications menu for settings.")
+    print("Start the background filter in Settings, or run:")
+    print(f"/usr/bin/python3 {shlex.quote(str(destination / 'run.py'))} enable")
+    print("Activation loads Mute and replaces ordinary US/RU sources; other layouts are preserved.")
+    print("For full desktop cooldown in GNOME, sign out and back in once after activation.")
     if result.returncode:
-        print("Шина сеанса недоступна. Выполните активацию из своего сеанса GNOME.")
+        print("The session bus is unavailable. Enable the filter from your GNOME session.")
     return 0
 
 
@@ -135,12 +149,15 @@ def uninstall():
     locations = paths()
     for key in ("component", "desktop", "icon", "dropin"):
         locations[key].unlink(missing_ok=True)
+    cli = locations["cli"]
+    if cli.is_file() and not cli.is_symlink() and CLI_MARKER in cli.read_text(encoding="utf-8"):
+        cli.unlink()
     destination = locations["app"]
     if destination.exists():
         # The app directory is wholly managed; user dictionaries/settings live elsewhere.
         shutil.rmtree(destination)
     subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-    print("Тише удалён. Словари и настройки сохранены. Выйдите и войдите в сеанс Ubuntu.")
+    print("Mute was removed. Dictionaries and settings were preserved. Sign out and back in to finish.")
     return 0
 
 
@@ -148,5 +165,5 @@ def main(command="install"):
     try:
         return install() if command == "install" else uninstall()
     except (OSError, ImportError, ValueError, RuntimeError) as error:
-        print(f"Не удалось выполнить установку: {error}", file=sys.stderr)
+        print(f"Installation could not be completed: {error}", file=sys.stderr)
         return 1

@@ -56,10 +56,10 @@ def _bus_value(bus, method: str, timeout_ms: int = 750):
             time.sleep(0.01)
     if not completed:
         cancellable.cancel()
-        raise RuntimeError("IBus не ответил вовремя; повторите подключение в сеансе GNOME.")
+        raise RuntimeError("IBus did not respond in time. Try enabling the filter again in your GNOME session.")
     success, value = completed[0]
     if not success:
-        raise RuntimeError("Не удалось получить состояние IBus.") from value
+        raise RuntimeError("Could not read the IBus status.") from value
     return value
 
 
@@ -81,16 +81,16 @@ def _ready_bus():
         pass
     locations = paths()
     if not locations["component"].is_file() or not locations["dropin"].is_file():
-        raise RuntimeError("Тише ещё не установлен для этого пользователя. Выполните run.py install, затем подключите фильтр.")
+        raise RuntimeError("Mute is not installed for this user. Run run.py install, then enable the filter.")
     try:
         result = subprocess.run(["systemctl", "--user", "restart", SERVICE],
                                 capture_output=True, timeout=10, check=False)
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise RuntimeError("Не удалось загрузить методы Тише: IBus не перезапустился вовремя. "
-                           "Повторите подключение из сеанса GNOME или выполните run.py doctor.") from error
+        raise RuntimeError("Could not load the Mute input methods: IBus did not restart in time. "
+                           "Try enabling the filter from your GNOME session, or run run.py doctor.") from error
     if result.returncode:
-        raise RuntimeError("Не удалось перезапустить службу IBus. Подключите фильтр из своего сеанса GNOME; "
-                           "для диагностики выполните run.py doctor. Источники ввода не изменены.")
+        raise RuntimeError("Could not restart IBus. Enable the filter from your GNOME session, "
+                           "or run run.py doctor for diagnostics. Input sources were not changed.")
     # IBus.Bus.new() is a singleton. Pumping the GLib context is necessary for
     # its socket monitor to notice the new daemon and reconnect after restart.
     context = GLib.MainContext.default()
@@ -105,8 +105,8 @@ def _ready_bus():
         except (GLib.Error, RuntimeError):
             pass
         time.sleep(0.05)
-    raise RuntimeError("IBus перезапущен, но методы Тише не появились. Повторите run.py install и подключение; "
-                       "run.py doctor покажет состояние. Источники ввода не изменены.")
+    raise RuntimeError("IBus restarted, but the Mute input methods are missing. Run run.py install and enable "
+                       "the filter again; run.py doctor shows diagnostics. Input sources were not changed.")
 
 
 def _mapped(pairs, *, enable: bool, ensure: bool = False):
@@ -138,7 +138,7 @@ def _update_sources(*, enable: bool):
     try:
         for key, value in updates.items():
             if not settings.set_value(key, GLib.Variant("a(ss)", value)):
-                raise RuntimeError("GNOME не разрешил изменить источники ввода; настройки оставлены прежними.")
+                raise RuntimeError("GNOME did not allow input-source changes. The previous settings were preserved.")
         settings.apply()
     except (GLib.Error, RuntimeError):
         settings.revert()
@@ -150,8 +150,8 @@ def enable():
     _ready_bus()
     _update_sources(enable=True)
     modal_ready = request_enable()
-    print("Русский и English подключены через Тише; порядок и остальные раскладки сохранены.")
-    print("Super+Space — сменить язык. Ctrl+Shift+F12 — пауза на пять минут.")
+    print("Russian and English now use Mute. Their order and other keyboard layouts were preserved.")
+    print("Super+Space switches languages. Ctrl+Shift+F12 pauses the filter for five minutes.")
     if not modal_ready:
         print("Full desktop cooldown: sign out and back in once to load the GNOME extension.")
     return 0
@@ -159,7 +159,7 @@ def enable():
 
 def disable():
     _update_sources(enable=False)
-    print("Источники Тише заменены обычными US/RU; порядок и остальные раскладки сохранены.")
+    print("Mute input sources were replaced with ordinary US/RU layouts. Their order and other layouts were preserved.")
     return 0
 
 
@@ -200,27 +200,38 @@ def status() -> Status:
                   configured, selected, True)
 
 
+def status_message_en(state: Status) -> str:
+    """English terminal wording; Status.message remains the settings UI text."""
+    return {
+        "source_active": "The selected Mute source filters typing in applications that support IBus.",
+        "requires_load": "Mute input methods are not loaded. Enable the filter to load them.",
+        "requires_setup": "The filter is not connected; ordinary input sources are configured.",
+        "ordinary_source": "The selected input source bypasses Mute. Select Mute EN/RU with Super+Space.",
+        "unavailable": "GNOME input sources or IBus are unavailable. Enable the filter in your GNOME session.",
+    }.get(state.code, "The filter status is unknown. Run run.py doctor for diagnostics.")
+
+
 def doctor():
     import importlib.util
     from . import config
     from .wordlists import WordLists
-    print(f"Сеанс: {os.environ.get('XDG_SESSION_TYPE', 'неизвестно')}")
-    print(f"Рабочий стол: {os.environ.get('XDG_CURRENT_DESKTOP', 'неизвестно')}")
+    print(f"Session: {os.environ.get('XDG_SESSION_TYPE', 'unknown')}")
+    print(f"Desktop: {os.environ.get('XDG_CURRENT_DESKTOP', 'unknown')}")
     for key in ("component", "dropin", "desktop"):
-        print(f"{key}: {'есть' if paths()[key].is_file() else 'нет'}")
-    print(f"GTK / gi: {'есть' if importlib.util.find_spec('gi') else 'нет'}")
+        print(f"{key}: {'present' if paths()[key].is_file() else 'missing'}")
+    print(f"GTK / gi: {'present' if importlib.util.find_spec('gi') else 'missing'}")
     lists = WordLists(config.wordlist_dir())
     errors = lists.reload()
-    print(f"Словари: {config.wordlist_dir()}")
+    print(f"Dictionaries: {config.wordlist_dir()}")
     for error in errors:
         print(f"  {error}")
     state = status()
-    print(f"Методы Тише: {'загружены' if state.engines_ready else 'не готовы'}")
-    print(f"Источники GNOME: {list(state.sources)}")
-    print(f"Текущий метод IBus: {state.global_engine or 'недоступен'}")
-    print(f"Состояние ({state.code}): {state.message}")
+    print(f"Mute input methods: {'loaded' if state.engines_ready else 'not ready'}")
+    print(f"GNOME sources: {list(state.sources)}")
+    print(f"Current IBus method: {state.global_engine or 'unavailable'}")
+    print(f"Status ({state.code}): {status_message_en(state)}")
     print(f"Full desktop cooldown: {'ready' if is_available() else 'pending GNOME extension login'}")
-    print("Ввод конкретного приложения нужно проверить отдельно; наличие настроек не подтверждает фильтрацию.")
+    print("Check typing in each application separately; configured sources alone do not confirm filtering.")
     return 0 if state.ready else 1
 
 
