@@ -11,8 +11,8 @@ or administrator access is used by the app.
   config validation, bounded input, composition, cooldowns, staged installation,
   activation/source mapping, immediate detection, Windows policy/native-API
   adapters with simulated calls, packaging, and truthful readiness reports.
-  Thirty-five display/session checks are skipped by normal discovery.
-- **26 real IBus integration checks passed** using a private D-Bus/IBus session.
+  Thirty-seven display/session checks are skipped by normal discovery.
+- **28 real IBus integration checks passed** using a private D-Bus/IBus session.
   They verify registry discovery from the installation XML, both layout metadata,
   native safe key passthrough, blocked matching keys/submission, Russian keyvals, Backspace/native
   navigation, shared cooldown, emergency pause, key-release handling, password,
@@ -21,7 +21,9 @@ or administrator access is used by the app.
   matching, Backspace rechecking and allowlisted longer-word prefixes. Safe
   application-name/address-prefix input and Enter emit neither preedit updates
   nor replacement text commits. Editing and clipboard/selection shortcuts keep
-  their native key flow. Only a completed Compose character is committed.
+  their native key flow. Only a completed Compose character is committed,
+  including standard Compose Space Space producing NBSP; an unsafe word still
+  blocks that composed boundary.
 - **9 GTK/config checks passed** under isolated Xvfb, covering missing setup,
   actual active-source status, closing settings without disabling the engine,
   asynchronous activation failure, persisted immediate mode, the English
@@ -34,6 +36,12 @@ or administrator access is used by the app.
   private-input hint without password masking; actual extension disable restores
   its original hints and re-enable marks it again. A read-only state probe was
   inserted only into the temporary test copy; no input events were injected.
+- **Actual Chrome 155 omnibox regression passed** with a fresh profile, private
+  Xvfb, D-Bus and IBus. Native XTest keys traversed the production guard; inline
+  completion stayed selected and Enter opened the completed internal URL.
+  Twenty-eight real IBus key callbacks were observed. The screenshot was
+  visually checked and all private test helpers were cleaned up. No normal
+  browser profile/history or physical desktop input was accessed.
 - Python compilation, shell syntax and whitespace checks passed.
 - A local English dictionary audit checked 104,334 words for accidental matches;
   discovered innocent-word matches were added as regression cases. This is a
@@ -69,6 +77,7 @@ Reproduce from the repository:
 bash tools/test-ibus.sh
 bash tools/test-ui.sh
 bash tools/test-gnome.sh
+/usr/bin/python3 tools/test-chrome.py
 /usr/bin/python3 tools/benchmark.py
 /usr/bin/python3 tools/measure-idle.py
 ```

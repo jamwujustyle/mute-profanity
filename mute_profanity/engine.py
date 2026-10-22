@@ -216,6 +216,10 @@ class MuteEngine(IBus.Engine):
             return False
         if char is None:
             char = IBus.keyval_to_unicode(keyval)
+        if composed and char and char.isspace():
+            if not self.finish():
+                self.commit_text(IBus.Text.new_from_string(char))
+            return True
         if char and all(not c.isspace() and unicodedata.category(c) not in {"Cc", "Cs", "Cn"}
                         for c in char):
             if not self.composition.insert(char):

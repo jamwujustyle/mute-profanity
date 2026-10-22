@@ -54,6 +54,16 @@ bash tools/test-ui.sh
 bash tools/test-gnome.sh
 ```
 
+The optional native Chrome autocomplete regression uses a fresh profile and
+private Xvfb/D-Bus/IBus session:
+
+```bash
+/usr/bin/python3 tools/test-chrome.py
+```
+
+It needs Chrome, XTest and the system Python `gi`/`websocket` modules, and it
+never uses the normal browser profile or desktop input.
+
 The display/session runners create private temporary environments; they must not
 be pointed at a normal desktop bus. Windows native-hook smoke tests must likewise
 run only in a disposable Windows session or the isolated Wine build environment.

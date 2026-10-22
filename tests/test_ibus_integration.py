@@ -340,6 +340,31 @@ class IBusIntegration(unittest.TestCase):
         finally:
             path.unlink(missing_ok=True)
 
+    def test_compose_nonbreaking_space_commits_only_the_composed_boundary(self):
+        self.type_text("hello")
+        self.assertTrue(self.press(self.IBus.KEY_Multi_key))
+        self.assertTrue(self.press(self.IBus.KEY_space))
+        self.assertTrue(self.press(self.IBus.KEY_space))
+        self.wait_for(lambda: bool(self.commits), "the composed nonbreaking space")
+        self.assertEqual(self.commits, ["\u00a0"])
+        self.assertEqual(self.preedits, [])
+        self.assertEqual(self.engine.composition.text, "")
+        self.assertEqual(self.runtime.cooldown.remaining(), 0)
+        self.assertFalse(self.press(self.IBus.KEY_Return))
+        self.assertEqual(self.commits, ["\u00a0"])
+
+    def test_compose_nonbreaking_space_rejects_an_unsafe_word_boundary(self):
+        self.boundary_mode()
+        self.type_text("fuck")
+        self.assertTrue(self.press(self.IBus.KEY_Multi_key))
+        self.assertTrue(self.press(self.IBus.KEY_space))
+        self.assertTrue(self.press(self.IBus.KEY_space))
+        self.assertEqual(self.commits, [])
+        self.assertEqual(self.preedits, [])
+        self.assertEqual(self.engine.composition.text, "")
+        self.assertGreater(self.runtime.cooldown.remaining(), 0)
+        self.assertEqual(self.runtime.cooldown.strikes, 1)
+
     def test_boundary_mode_checks_invisible_format_characters(self):
         self.boundary_mode()
         self.type_text("f\u200buck", unicode_keyvals=True)
