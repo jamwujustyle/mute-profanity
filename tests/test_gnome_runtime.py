@@ -65,6 +65,48 @@ class GnomeRuntimeTests(unittest.TestCase):
                         self.fail("Private GNOME did not export the extension:\n" + log_path.read_text())
                     time.sleep(0.1)
 
+                def search_state():
+                    return connection.call_sync(
+                        bus_name, "/org/gnome/Shell/Extensions/MuteProfanityTest",
+                        "org.gnome.Shell.Extensions.MuteProfanityTest", "SearchState", None,
+                        GLib.VariantType.new("(uuubb)"), Gio.DBusCallFlags.NO_AUTO_START,
+                        500, None,
+                    ).unpack()
+
+                hints, original_hints, sensitive_bit, masked, originally_masked = search_state()
+                self.assertTrue(hints & sensitive_bit, "Overview search was not marked for input-method bypass")
+                self.assertEqual(hints, original_hints | sensitive_bit)
+                self.assertFalse(originally_masked, "The private test search field started password-masked")
+                self.assertFalse(masked, "The search compatibility hint masked the field")
+
+                def toggle_extension(method):
+                    return connection.call_sync(
+                        bus_name, "/org/gnome/Shell", "org.gnome.Shell.Extensions", method,
+                        GLib.Variant("(s)", ("mute-profanity@local",)),
+                        GLib.VariantType.new("(b)"), Gio.DBusCallFlags.NO_AUTO_START,
+                        500, None,
+                    ).unpack()
+
+                self.assertEqual((True,), toggle_extension("DisableExtension"))
+                restore_deadline = time.monotonic() + 2
+                while True:
+                    hints, baseline, _bit, masked, originally_masked = search_state()
+                    if hints == baseline:
+                        break
+                    self.assertLess(time.monotonic(), restore_deadline, "Disabling the extension did not restore search hints")
+                    time.sleep(0.05)
+                self.assertEqual(masked, originally_masked)
+                self.assertEqual((True,), toggle_extension("EnableExtension"))
+                enable_deadline = time.monotonic() + 2
+                while True:
+                    hints, baseline, bit, masked, originally_masked = search_state()
+                    if hints & bit:
+                        break
+                    self.assertLess(time.monotonic(), enable_deadline, "Re-enabling did not mark overview search")
+                    time.sleep(0.05)
+                self.assertEqual(hints, baseline | bit)
+                self.assertEqual(masked, originally_masked)
+
                 self.assertEqual((True,), call("Show", GLib.Variant("(u)", (2,)), "(b)"))
                 self.assertIsNone(shell.poll(), "Nested Shell exited during its modal grab")
                 allocation_deadline = time.monotonic() + 0.75
@@ -94,6 +136,7 @@ class GnomeRuntimeTests(unittest.TestCase):
                                 "JS ERROR: Extension mute-profanity@local", "Error: Mute"):
                     self.assertNotIn(failure, output)
                 print("Private GNOME 46: Show acquired full-stage modal; expiry released/destroyed it; Hide/re-grab passed.")
+                print("Overview search: bypass hint set without masking; actual disable restored original hints; re-enable passed.")
             except Exception as error:
                 log.flush()
                 self.fail(f"{error}\nPrivate GNOME log:\n" + log_path.read_text()[-16000:])

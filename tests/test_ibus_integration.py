@@ -97,6 +97,13 @@ class IBusIntegration(unittest.TestCase):
                 self.context.iteration(False)
             time.sleep(0.001)
 
+    def drain(self, duration=0.02):
+        deadline = time.monotonic() + duration
+        while time.monotonic() < deadline:
+            while self.context.pending():
+                self.context.iteration(False)
+            time.sleep(0.001)
+
     def complete_async(self, start, finish):
         result = []
 
@@ -120,9 +127,7 @@ class IBusIntegration(unittest.TestCase):
             lambda source, response: source.call_finish(response))
 
     def setUp(self):
-        # Retain explicit coverage for the optional word-boundary mode even
-        # though new installations use the immediate reaction by default.
-        self.config.save(self.config.Settings(instant_trigger=False, beep=False))
+        self.config.save(self.config.Settings(instant_trigger=True, beep=False))
         self.runtime.reload()
         self.runtime.cooldown.cancel()
         self.runtime.cooldown.strikes = 0
@@ -136,8 +141,7 @@ class IBusIntegration(unittest.TestCase):
         self.client.set_capabilities(int(self.IBus.Capabilite.PREEDIT_TEXT |
                                          self.IBus.Capabilite.AUXILIARY_TEXT |
                                          self.IBus.Capabilite.FOCUS))
-        # Ask the actual daemon to apply the engine's COMMIT/CLEAR mode on focus
-        # loss; Gtk clients can instead perform the same policy client-side.
+        # An accidental preedit/commit on focus loss must also be observable.
         self.client.set_client_commit_preedit(False)
         self.client.focus_in()
         self.switch("mute-en")
@@ -154,6 +158,8 @@ class IBusIntegration(unittest.TestCase):
         errors = self.callback_errors[:]
         self.callback_errors.clear()
         self.assertEqual(errors, [], "Unexpected IBus callback exception:\n" + "\n".join(errors))
+        self.assertTrue(all(not text and not visible for text, _cursor, visible in self.preedits),
+                        "IBus lifecycle clears may be empty, but no visible preedit is permitted")
 
     def switch(self, name):
         self.rpc("SetEngine", self.GLib.Variant("(s)", (name,)))
@@ -165,24 +171,44 @@ class IBusIntegration(unittest.TestCase):
                                  for engine in self.runtime.engines), "the requested engine")
         self.engine = next(engine for engine in self.runtime.engines
                            if engine.get_property("engine-name") == name)
+        # The daemon emits its own empty preedit reset when changing engines.
+        # Measure key handling only after those lifecycle messages have settled.
+        self.drain()
+        self.preedits.clear()
 
     def press(self, keyval, state=0):
-        return self.complete_async(
+        previous = len(self.preedits)
+        result = self.complete_async(
             lambda callback: self.client.process_key_event_async(keyval, 0, state, 1500,
                                                                  None, callback, None),
             lambda source, response: source.process_key_event_async_finish(response))
+        self.assertEqual(self.preedits[previous:], [],
+                         "Key processing must not emit preedit, including empty updates")
+        return result
 
-    def type_text(self, text, *, unicode_keyvals=False):
-        for character in text:
+    def type_text(self, text, *, unicode_keyvals=False, blocked_last=False):
+        for index, character in enumerate(text):
             keyval = (0x01000000 | ord(character)) if unicode_keyvals else self.IBus.unicode_to_keyval(character)
-            self.assertTrue(self.press(keyval), "The engine should hold ordinary word characters")
+            expected = blocked_last and index == len(text) - 1
+            self.assertEqual(self.press(keyval), expected,
+                             "Safe characters must use their native key event; only a triggering key is suppressed")
 
-    def immediate(self, **settings):
-        self.config.save(replace(self.config.load(), instant_trigger=True, **settings))
+    def boundary_mode(self):
+        self.config.save(replace(self.config.load(), instant_trigger=False))
         self.runtime.reload()
 
-    def test_immediate_russian_rejects_final_letter_without_space(self):
-        self.immediate()
+    def test_safe_search_prefixes_and_enter_preserve_native_events_without_ime_updates(self):
+        for prefix in ("chr", "n2"):
+            with self.subTest(prefix=prefix):
+                self.type_text(prefix)
+                self.assertEqual(self.engine.composition.text, prefix)
+                self.assertFalse(self.press(self.IBus.KEY_Return))
+                self.assertEqual(self.engine.composition.text, "")
+                self.assertEqual(self.commits, [])
+                self.assertEqual(self.preedits, [])
+        self.assertEqual(self.runtime.cooldown.remaining(), 0)
+
+    def test_immediate_russian_rejects_only_final_letter_without_space(self):
         self.switch("mute-ru")
         self.type_text("су", unicode_keyvals=True)
         self.assertEqual(self.engine.composition.text, "су")
@@ -190,19 +216,18 @@ class IBusIntegration(unittest.TestCase):
         self.type_text("к", unicode_keyvals=True)
         self.assertEqual(self.engine.composition.text, "сук")
         self.assertEqual(self.runtime.cooldown.remaining(), 0)
-        self.type_text("а", unicode_keyvals=True)
+        self.type_text("а", unicode_keyvals=True, blocked_last=True)
         self.assertEqual(self.engine.composition.text, "")
         self.assertGreater(self.runtime.cooldown.remaining(), 0)
         self.assertEqual(self.runtime.cooldown.strikes, 1)
         self.assertEqual(self.commits, [])
 
     def test_immediate_english_rejects_final_letter_and_shares_cooldown(self):
-        self.immediate()
         original = self.engine
         self.type_text("fuc")
         self.assertEqual(self.engine.composition.text, "fuc")
         self.assertEqual(self.runtime.cooldown.remaining(), 0)
-        self.type_text("k")
+        self.type_text("k", blocked_last=True)
         self.assertEqual(self.engine.composition.text, "")
         self.assertGreater(self.runtime.cooldown.remaining(), 0)
         self.assertEqual(self.commits, [])
@@ -215,7 +240,6 @@ class IBusIntegration(unittest.TestCase):
         self.assertEqual(self.commits, [])
 
     def test_immediate_custom_language_word_reloads_and_blocks_on_last_letter(self):
-        self.immediate()
         path = self.config.wordlist_dir() / "el-immediate-test.txt"
         try:
             path.write_text("βρισιά\n", encoding="utf-8")
@@ -224,7 +248,7 @@ class IBusIntegration(unittest.TestCase):
             self.type_text("βρισι", unicode_keyvals=True)
             self.assertEqual(self.engine.composition.text, "βρισι")
             self.assertEqual(self.runtime.cooldown.remaining(), 0)
-            self.type_text("ά", unicode_keyvals=True)
+            self.type_text("ά", unicode_keyvals=True, blocked_last=True)
             self.assertEqual(self.engine.composition.text, "")
             self.assertGreater(self.runtime.cooldown.remaining(), 0)
             self.assertEqual(self.commits, [])
@@ -232,7 +256,6 @@ class IBusIntegration(unittest.TestCase):
             path.unlink(missing_ok=True)
 
     def test_immediate_composed_accent_uses_custom_word_filter(self):
-        self.immediate()
         path = self.config.wordlist_dir() / "fr-immediate-test.txt"
         try:
             path.write_text("café\n", encoding="utf-8")
@@ -249,8 +272,7 @@ class IBusIntegration(unittest.TestCase):
         finally:
             path.unlink(missing_ok=True)
 
-    def test_immediate_backspace_rechecks_a_word_after_dictionary_reload(self):
-        self.immediate()
+    def test_backspace_passes_through_and_warns_after_dictionary_reload(self):
         self.type_text("novelx")
         path = self.config.wordlist_dir() / "xx-backspace-test.txt"
         try:
@@ -259,15 +281,16 @@ class IBusIntegration(unittest.TestCase):
                           "the new exact custom word")
             self.assertEqual(self.engine.composition.text, "novelx")
             self.assertEqual(self.runtime.cooldown.remaining(), 0)
-            self.assertTrue(self.press(self.IBus.KEY_BackSpace))
+            self.assertFalse(self.press(self.IBus.KEY_BackSpace))
             self.assertEqual(self.engine.composition.text, "")
             self.assertGreater(self.runtime.cooldown.remaining(), 0)
             self.assertEqual(self.commits, [])
         finally:
             path.unlink(missing_ok=True)
 
-    def test_immediate_allow_word_defers_prefix_but_standalone_word_is_rejected(self):
-        self.immediate(allow_words=["assembly"])
+    def test_allow_word_preserves_native_typing_but_unsafe_standalone_boundary_is_blocked(self):
+        self.config.save(replace(self.config.load(), allow_words=["assembly"]))
+        self.runtime.reload()
         self.type_text("ass")
         self.assertEqual(self.engine.composition.text, "ass")
         self.assertEqual(self.runtime.cooldown.remaining(), 0)
@@ -275,9 +298,7 @@ class IBusIntegration(unittest.TestCase):
         self.assertEqual(self.engine.composition.text, "assembly")
         self.assertEqual(self.runtime.cooldown.remaining(), 0)
         self.assertFalse(self.press(self.IBus.KEY_space))
-        self.wait_for(lambda: bool(self.commits), "the complete allowed word")
-        self.assertEqual(self.commits, ["assembly"])
-        self.commits.clear()
+        self.assertEqual(self.commits, [])
         self.type_text("ass")
         self.assertEqual(self.runtime.cooldown.remaining(), 0)
         self.assertTrue(self.press(self.IBus.KEY_space))
@@ -285,29 +306,24 @@ class IBusIntegration(unittest.TestCase):
         self.assertGreater(self.runtime.cooldown.remaining(), 0)
         self.assertEqual(self.commits, [])
 
-    def test_immediate_mode_preserves_private_field_bypass(self):
-        self.immediate()
-        self.assert_private_bypass(self.IBus.InputPurpose.PASSWORD, 0)
-
-    def test_safe_word_commits_only_on_space(self):
+    def test_safe_word_and_space_never_generate_commit_or_preedit(self):
         self.type_text("hello")
-        self.assertEqual(self.commits, [])
         self.assertEqual(self.engine.composition.text, "hello")
         self.assertFalse(self.press(self.IBus.KEY_space))
-        self.wait_for(lambda: bool(self.commits), "the safe word's CommitText signal")
-        self.assertEqual(self.commits, ["hello"])
+        self.assertEqual(self.commits, [])
+        self.assertEqual(self.preedits, [])
         self.assertEqual(self.engine.composition.text, "")
 
-    def test_wordlist_auto_reload_and_composed_accents_use_same_filter(self):
-        # No composition library is loaded until a dead key is actually used.
+    def test_wordlist_reload_and_compose_commit_only_the_completed_accent(self):
+        # Ordinary characters never need the composition library or IME commits.
         self.assertIsNone(self.engine.composer)
         self.type_text("caf")
         self.assertTrue(self.press(0xFE51))  # dead_acute
         self.assertTrue(self.press(ord("e")))
         self.assertEqual(self.engine.composition.text, "café")
         self.assertFalse(self.press(self.IBus.KEY_space))
-        self.wait_for(lambda: bool(self.commits), "composed Unicode text")
-        self.assertEqual(self.commits, ["café"])
+        self.wait_for(lambda: bool(self.commits), "the composed accent only")
+        self.assertEqual(self.commits, ["é"])
         self.commits.clear()
         path = self.config.wordlist_dir() / "fr-test.txt"
         try:
@@ -318,18 +334,20 @@ class IBusIntegration(unittest.TestCase):
             self.assertTrue(self.press(self.IBus.KEY_Multi_key))
             self.assertTrue(self.press(ord("'")))
             self.assertTrue(self.press(ord("e")))
-            self.assertTrue(self.press(self.IBus.KEY_space))
+            self.assertEqual(self.engine.composition.text, "")
             self.assertEqual(self.commits, [])
             self.assertGreater(self.runtime.cooldown.remaining(), 0)
         finally:
             path.unlink(missing_ok=True)
 
-    def test_invisible_format_character_remains_in_checked_composition(self):
+    def test_boundary_mode_checks_invisible_format_characters(self):
+        self.boundary_mode()
         self.type_text("f\u200buck", unicode_keyvals=True)
         self.assertTrue(self.press(self.IBus.KEY_space))
         self.assertEqual(self.commits, [])
 
-    def test_profanity_is_withheld_and_enter_is_blocked(self):
+    def test_boundary_mode_suppresses_unsafe_submit_without_recommitting_text(self):
+        self.boundary_mode()
         self.type_text("fuck")
         self.assertEqual(self.commits, [])
         self.assertTrue(self.press(self.IBus.KEY_space))
@@ -340,38 +358,63 @@ class IBusIntegration(unittest.TestCase):
         self.assertTrue(self.press(self.IBus.KEY_KP_Enter))
         self.assertEqual(self.commits, [])
 
-    def test_russian_unicode_keyvals(self):
+    def test_russian_unicode_keyvals_use_native_safe_typing(self):
         self.switch("mute-ru")
         self.type_text("Привет", unicode_keyvals=True)
         self.assertFalse(self.press(self.IBus.KEY_space))
-        self.wait_for(lambda: bool(self.commits), "Russian safe text")
-        self.assertEqual(self.commits, ["Привет"])
-        self.commits.clear()
-        self.type_text("блядь", unicode_keyvals=True)
-        self.assertTrue(self.press(self.IBus.KEY_space))
+        self.assertEqual(self.commits, [])
+        self.type_text("бл", unicode_keyvals=True)
+        self.type_text("я", unicode_keyvals=True, blocked_last=True)
         self.assertEqual(self.commits, [])
         self.assertGreater(self.runtime.cooldown.remaining(), 0)
 
-    def test_composition_cursor_and_edits(self):
+    def test_native_backspace_navigation_and_selection_do_not_commit_or_filter(self):
         self.type_text("hellx")
-        self.assertTrue(self.press(self.IBus.KEY_BackSpace))
+        self.assertFalse(self.press(self.IBus.KEY_BackSpace))
         self.assertEqual(self.engine.composition.text, "hell")
         self.type_text("o")
-        # Navigation commits a validated word and lets the native client move
-        # its cursor, preserving selections across composition boundaries.
-        self.assertFalse(self.press(self.IBus.KEY_Left))
-        self.wait_for(lambda: bool(self.commits), "the edited safe word")
-        self.assertEqual(self.commits, ["hello"])
+        shift = int(self.IBus.ModifierType.SHIFT_MASK)
+        self.assertFalse(self.press(self.IBus.KEY_Left, shift))
         self.assertEqual(self.engine.composition.text, "")
+        self.assertEqual(self.commits, [])
+        self.boundary_mode()
+        for key in (self.IBus.KEY_Delete, self.IBus.KEY_Left, self.IBus.KEY_Right,
+                    self.IBus.KEY_Home, self.IBus.KEY_End, self.IBus.KEY_Escape):
+            with self.subTest(key=key):
+                self.type_text("fuck")
+                self.assertFalse(self.press(key))
+                self.assertEqual(self.engine.composition.text, "")
+                self.assertEqual(self.runtime.cooldown.remaining(), 0)
+                self.assertEqual(self.commits, [])
+
+    def test_native_shortcuts_reset_tracking_and_safe_modified_submit_passes(self):
+        self.boundary_mode()
+        control = int(self.IBus.ModifierType.CONTROL_MASK)
+        for character in "acvxz":
+            with self.subTest(shortcut=character):
+                self.type_text("fuck")
+                self.assertFalse(self.press(ord(character), control))
+                self.assertEqual(self.engine.composition.text, "")
+                self.assertEqual(self.runtime.cooldown.remaining(), 0)
+        self.type_text("hello")
+        self.assertFalse(self.press(self.IBus.KEY_Return, control))
+        self.assertEqual(self.engine.composition.text, "")
+        self.assertEqual(self.commits, [])
+
+    def test_unsafe_modified_submit_is_blocked_in_boundary_mode(self):
+        self.boundary_mode()
         self.type_text("fuck")
-        self.assertTrue(self.press(self.IBus.KEY_Delete))
-        self.assertEqual(self.commits, ["hello"])
+        control = int(self.IBus.ModifierType.CONTROL_MASK)
+        self.assertFalse(self.press(self.IBus.KEY_Control_L, control))
+        self.assertEqual(self.engine.composition.text, "fuck")
+        self.assertTrue(self.press(self.IBus.KEY_Return, control))
+        self.assertEqual(self.engine.composition.text, "")
         self.assertGreater(self.runtime.cooldown.remaining(), 0)
+        self.assertEqual(self.commits, [])
 
     def test_cooldown_survives_a_new_language_engine(self):
         original = self.engine
-        self.type_text("fuck")
-        self.assertTrue(self.press(self.IBus.KEY_space))
+        self.type_text("fuck", blocked_last=True)
         self.switch("mute-ru")
         self.assertIsNot(self.engine, original)
         self.assertIs(self.engine.runtime.cooldown, original.runtime.cooldown)
@@ -381,29 +424,53 @@ class IBusIntegration(unittest.TestCase):
         self.assertEqual(self.commits, [])
 
     def test_emergency_pause_cancels_cooldown_and_passes_input(self):
-        self.type_text("fuck")
-        self.assertTrue(self.press(self.IBus.KEY_space))
+        self.type_text("fuck", blocked_last=True)
         modifiers = int(self.IBus.ModifierType.CONTROL_MASK | self.IBus.ModifierType.SHIFT_MASK)
         self.assertTrue(self.press(self.IBus.KEY_F12, modifiers))
         self.assertGreater(self.config.load().paused_until, time.time() + 290)
         self.assertEqual(self.runtime.cooldown.remaining(), 0)
         self.assertFalse(self.press(ord("a")))
         self.assertEqual(self.engine.composition.text, "")
+        self.assertEqual(self.commits, [])
 
-    def test_password_purpose_never_buffers_or_filters(self):
+    def test_disabled_filter_clears_tracker_without_flush_or_preedit(self):
+        self.type_text("hello")
+        self.config.save(replace(self.config.load(), enabled=False))
+        self.runtime.reload()
+        self.type_text("fuck")
+        self.assertFalse(self.press(self.IBus.KEY_Return))
+        self.assertEqual(self.engine.composition.text, "")
+        self.assertEqual(self.commits, [])
+        self.assertEqual(self.runtime.cooldown.remaining(), 0)
+
+    def test_password_purpose_never_tracks_or_filters(self):
         self.assert_private_bypass(self.IBus.InputPurpose.PASSWORD, 0)
 
-    def test_pin_purpose_never_buffers_or_filters(self):
+    def test_pin_purpose_never_tracks_or_filters(self):
         self.assert_private_bypass(self.IBus.InputPurpose.PIN, 0)
 
-    def test_private_hint_never_buffers_or_filters(self):
+    def test_private_hint_never_tracks_or_filters(self):
         self.assert_private_bypass(self.IBus.InputPurpose.FREE_FORM, self.IBus.InputHints.PRIVATE)
+
+    def test_non_message_purposes_preserve_native_typing_and_submit(self):
+        for name in ("DIGITS", "NUMBER", "PHONE", "URL", "EMAIL", "NAME", "TERMINAL"):
+            with self.subTest(purpose=name):
+                self.assert_private_bypass(getattr(self.IBus.InputPurpose, name), 0)
+
+    def test_alpha_purpose_still_filters_ordinary_message_typing(self):
+        self.client.set_content_type(self.IBus.InputPurpose.ALPHA, 0)
+        self.wait_for(lambda: self.engine.get_content_type()[0] == self.IBus.InputPurpose.ALPHA,
+                      "alphabetic content type")
+        self.assertFalse(self.engine.private)
+        self.type_text("fuck", blocked_last=True)
+        self.assertGreater(self.runtime.cooldown.remaining(), 0)
+        self.assertEqual(self.commits, [])
 
     def assert_private_bypass(self, purpose, hints):
         self.client.set_content_type(purpose, hints)
-        self.wait_for(lambda: self.engine.private, "private content type")
-        for character in "fuck":
-            self.assertFalse(self.press(ord(character)))
+        self.wait_for(lambda: self.engine.private and tuple(self.engine.get_content_type()) == (purpose, hints),
+                      "non-message/private content type")
+        self.type_text("fuck")
         self.assertFalse(self.press(self.IBus.KEY_Return))
         self.assertEqual(self.engine.composition.text, "")
         self.assertEqual(self.commits, [])
@@ -420,23 +487,24 @@ class IBusIntegration(unittest.TestCase):
         self.assertEqual(self.commits, [])
         self.assertEqual(self.config.load().paused_until, 0)
         self.assertFalse(self.press(self.IBus.KEY_space))
-        self.wait_for(lambda: bool(self.commits), "safe text after key releases")
-        self.assertEqual(self.commits, ["hello"])
+        self.assertEqual(self.engine.composition.text, "")
+        self.assertEqual(self.commits, [])
 
-    def test_focus_out_commits_safe_preedit(self):
+    def test_focus_out_clears_safe_tracker_without_commit(self):
         self.type_text("hello")
         self.client.focus_out()
         self.wait_for(lambda: self.engine.composition.text == "", "safe focus-out clearing")
-        self.wait_for(lambda: bool(self.commits), "safe focus-out CommitText")
-        self.assertEqual(self.commits, ["hello"])
+        self.assertEqual(self.commits, [])
         self.assertEqual(self.runtime.cooldown.remaining(), 0)
 
-    def test_focus_out_clears_unsafe_preedit(self):
+    def test_focus_out_clears_unsafe_tracker_without_commit_or_penalty(self):
+        self.boundary_mode()
         self.type_text("fuck")
         self.client.focus_out()
-        self.wait_for(lambda: self.runtime.cooldown.remaining() > 0, "unsafe focus-out penalty")
+        self.wait_for(lambda: self.engine.composition.text == "", "unsafe focus-out clearing")
         self.assertEqual(self.engine.composition.text, "")
         self.assertEqual(self.commits, [])
+        self.assertEqual(self.runtime.cooldown.remaining(), 0)
 
 
 if __name__ == "__main__":

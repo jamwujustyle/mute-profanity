@@ -4,8 +4,8 @@ A small, offline Russian/English profanity guard for Windows and Ubuntu GNOME.
 No AI, account, API key, subscription, network connection, or paid service is
 needed at runtime. Settings can stay closed: the input guard runs separately.
 
-By default, a match triggers **immediately while typing**, clears the current
-word and starts an escalating **8 → 16 → 32 → 60 second** cooldown. The warning
+By default, a match triggers **immediately while typing**, blocks the matching
+key and starts an escalating **8 → 16 → 32 → 60 second** cooldown. The warning
 is in **English**. The desktop cooldown covers the monitors and blocks normal
 mouse/keyboard interaction until it expires. It releases automatically; it does
 not suspend the operating system or its background work.
@@ -81,10 +81,18 @@ missing, Ubuntu's packages are `python3-gi`, `gir1.2-gtk-3.0`,
 ## Immediate feedback and exceptions
 
 **React immediately / Мгновенная реакция** is on by default. The trigger happens
-on the character that first makes the pending text match, before Space, Enter
-or Send. Turning it off restores checking at word completion. Both modes block
-matched input before the guard commits it; pasting and editing existing text
-have separate limitations.
+on the character that first makes the tracked word match, before Space, Enter
+or Send. Ordinary Linux keystrokes pass straight to the application; the guard
+does not hold them as unfinished IME input. Native search, autocomplete, editing
+and Enter keep their normal key flow. A blocked attempt leaves its already
+typed prefix in place on Linux; correct that prefix before continuing. The
+guard does not inject deletion into a field whose contents it cannot verify.
+
+Turning immediate mode off waits until a word boundary. In that mode the word
+is already visible before the warning. A mouse Send action can bypass boundary
+checks, including a deferred prefix of an allowed word. Keep immediate mode on
+for prevention during typing. Paste,
+application-generated completion and editing existing text have separate limits.
 
 Immediate mode is deliberately stricter. For example, a prohibited `ass` prefix
 can interrupt `assembly` before the rest of the word has been typed. Add the
@@ -142,8 +150,16 @@ intent. False positives and misses are possible, especially in immediate mode.
 Linux filtering requires an IBus-compatible application and a selected guarded
 source. Clipboard input, voice input, other sources, games without IBus and
 editing already committed text can bypass it. Space-separated spelling is not
-guaranteed to be caught. Password/PIN/private fields marked by the application
-bypass detection; terminal passwords may not expose that label.
+guaranteed to be caught. Declared URL, email, terminal, numeric, name and private
+fields bypass detection. The GNOME companion marks only overview search as
+private input so launching an application remains native. Ordinary chat/editor
+fields stay guarded. Applications that omit field metadata cannot receive that
+field-specific exemption, but safe keys still pass through normally.
+
+The Linux guard tracks typed keys rather than the full field. It does not erase
+an existing prefix or guarantee recognition across focus changes, edits,
+application transformations or a resumed attempt after cooldown. Password
+privacy also depends on the application reporting its field correctly.
 
 Windows suppresses the matching key and removes only a known, contiguous prefix
 in the same focused control. Focus changes, mouse editing, shortcuts, uncertain

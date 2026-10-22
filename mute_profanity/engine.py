@@ -1,4 +1,4 @@
-"""IBus adapter. No device access, key logging, network, or idle polling."""
+"""Transparent IBus key guard. Safe keys keep their native application flow."""
 
 from dataclasses import replace
 import math
@@ -65,7 +65,6 @@ class Runtime:
         for engine in tuple(self.engines):
             engine.composition.settings = self.settings
             engine.composition.matcher = self.matcher
-            engine.show_composition()
         return GLib.SOURCE_REMOVE
 
     def active(self):
@@ -83,7 +82,6 @@ class Runtime:
         for engine in tuple(self.engines):
             engine.composition.clear()
             engine.reset_compose()
-            engine.show_composition()
             engine.update_auxiliary_text(IBus.Text.new_from_string("Пауза на 5 минут"), True)
 
     def intervene(self, seconds):
@@ -124,26 +122,12 @@ class MuteEngine(IBus.Engine):
         if self.composer is not None:
             self.composer.reset()
 
-    def show_composition(self, *, unsafe=None):
-        text = IBus.Text.new_from_string(self.composition.text)
-        if self.composition.text:
-            text.append_attribute(IBus.AttrType.UNDERLINE, IBus.AttrUnderline.SINGLE,
-                                  0, len(self.composition.text))
-        if unsafe is None:
-            unsafe = self.composition.unsafe()
-        mode = IBus.PreeditFocusMode.CLEAR if unsafe else IBus.PreeditFocusMode.COMMIT
-        self.update_preedit_text_with_mode(text, self.composition.cursor,
-                                          bool(self.composition.text), mode)
-
     def after_edit(self):
         unsafe = self.composition.unsafe()
         if (self.runtime.settings.instant_trigger and unsafe
                 and not self.runtime.matcher.allows_completion(self.composition.text)):
-            # Consume the matching character, clear preedit and start the same
-            # penalty path used at boundaries. No text is committed first.
-            self.finish()
-        else:
-            self.show_composition(unsafe=unsafe)
+            return self.finish()
+        return False
 
     def _feedback(self):
         remaining = self.runtime.cooldown.remaining()
@@ -157,14 +141,13 @@ class MuteEngine(IBus.Engine):
 
     def finish(self):
         result = self.composition.finish()
-        self.show_composition()
         if result.blocked:
             self.runtime.intervene(result.seconds)
             self._feedback()
             if not self.tick_id:
                 self.tick_id = GLib.timeout_add_seconds(1, self._feedback)
-        elif result.text:
-            self.commit_text(IBus.Text.new_from_string(result.text))
+        # Safe text has already reached the application through its original
+        # key events. Re-committing it would replace autocomplete/selection.
         return result.blocked
 
     def do_process_key_event(self, keyval, keycode, state):
@@ -178,12 +161,7 @@ class MuteEngine(IBus.Engine):
             return False
         if not self.runtime.active():
             self.reset_compose()
-            # Flush only a validated pending word when turning the filter off.
-            if self.composition.text:
-                result = self.composition.finish()
-                self.show_composition()
-                if result.text:
-                    self.commit_text(IBus.Text.new_from_string(result.text))
+            self.composition.clear()
             return False
         if keyval in MODIFIER_KEYS:
             return False
@@ -198,8 +176,12 @@ class MuteEngine(IBus.Engine):
             return bool(char or keyval in (IBus.KEY_Return, IBus.KEY_KP_Enter, IBus.KEY_Tab))
         if shortcut:
             self.reset_compose()
-            return self.finish() if self.composition.text else False
+            if keyval in (IBus.KEY_Return, IBus.KEY_KP_Enter):
+                return self.finish() if self.composition.text else False
+            self.composition.clear()
+            return False
         char = None
+        composed = False
         if is_compose_start(keyval) or (self.composer and self.composer.composing):
             if self.composer and keyval in (IBus.KEY_Escape, IBus.KEY_BackSpace):
                 self.reset_compose()
@@ -207,7 +189,7 @@ class MuteEngine(IBus.Engine):
             try:
                 if self.composer is None:
                     self.composer = Composer()
-                status, composed = self.composer.feed(keyval)
+                status, composed_text = self.composer.feed(keyval)
             except RuntimeError:
                 self.update_auxiliary_text(IBus.Text.new_from_string(
                     "Для Compose нужна системная библиотека libxkbcommon."), True)
@@ -215,26 +197,23 @@ class MuteEngine(IBus.Engine):
             if status == "composing":
                 return True
             if status == "composed":
-                char = composed
+                char = composed_text
+                composed = True
                 self.reset_compose()
             elif status == "cancelled":
                 self.reset_compose()
             elif is_compose_start(keyval):
                 return True
         if keyval == IBus.KEY_Escape:
-            if not self.composition.text:
-                return False
             self.composition.clear()
-            self.show_composition()
-            return True
+            return False
         if keyval == IBus.KEY_BackSpace and self.composition.text:
             self.composition.backspace()
             self.after_edit()
-            return True
+            return False
         if keyval in (IBus.KEY_Delete, IBus.KEY_Left, IBus.KEY_Right, IBus.KEY_Home, IBus.KEY_End):
-            # Accept a clean composition before native cursor/selection editing.
-            # This preserves Shift-selection and movement across word boundaries.
-            return self.finish() if self.composition.text else False
+            self.composition.clear()
+            return False
         if char is None:
             char = IBus.keyval_to_unicode(keyval)
         if char and all(not c.isspace() and unicodedata.category(c) not in {"Cc", "Cs", "Cn"}
@@ -244,18 +223,20 @@ class MuteEngine(IBus.Engine):
                 if self.finish():
                     return True
                 self.composition.insert(char)
-            self.after_edit()
-            return True
-        # Space, Enter, Tab and navigation all
-        # validate the pending word before the original event is forwarded.
+            if self.after_edit():
+                return True
+            if composed:
+                self.commit_text(IBus.Text.new_from_string(char))
+                return True
+            return False
+        # Validate the tracked word without generating IME commits or preedit.
         return self.finish() if self.composition.text else False
 
     def do_set_content_type(self, purpose, hints):
-        self.private = (purpose in (IBus.InputPurpose.PASSWORD, IBus.InputPurpose.PIN)
+        self.private = (purpose not in (IBus.InputPurpose.FREE_FORM, IBus.InputPurpose.ALPHA)
                         or bool(hints & IBus.InputHints.PRIVATE))
         self.composition.clear()
         self.reset_compose()
-        self.show_composition()
 
     def do_set_capabilities(self, caps):
         self.capabilities = caps
@@ -264,17 +245,14 @@ class MuteEngine(IBus.Engine):
         self.composition.clear()
         self.reset_compose()
         purpose, hints = self.get_content_type()
-        self.private = (purpose in (IBus.InputPurpose.PASSWORD, IBus.InputPurpose.PIN)
+        self.private = (purpose not in (IBus.InputPurpose.FREE_FORM, IBus.InputPurpose.ALPHA)
                         or bool(hints & IBus.InputHints.PRIVATE))
         if self.runtime.cooldown.remaining() > 0 and not self.private:
             self._feedback()
 
     def do_focus_out(self):
-        # IBus has already applied the most recent COMMIT/CLEAR mode. Sending
-        # text here could deliver it to a different application's context.
-        if self.composition.unsafe() and not self.private and self.runtime.active():
-            seconds = self.runtime.cooldown.hit(self.runtime.settings)
-            self.runtime.intervene(seconds)
+        # Never commit, delete or penalize text while focus is moving. The
+        # native application owns its contents, selection and autocomplete.
         self.composition.clear()
         self.private = False
         self.reset_compose()
@@ -282,12 +260,10 @@ class MuteEngine(IBus.Engine):
     def do_reset(self):
         self.composition.clear()
         self.reset_compose()
-        self.show_composition()
 
     def do_disable(self):
         self.composition.clear()
         self.reset_compose()
-        self.show_composition()
 
     def do_destroy(self):
         if self.tick_id:

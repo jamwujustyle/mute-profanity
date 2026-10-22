@@ -81,6 +81,31 @@ shutil.copytree(source / "assets/gnome-extension", target)
 # the production countdown actually destroys its actor and releases its grab.
 extension = target / "extension.js"
 code = extension.read_text()
+# This independent read-only observer stays exported while the extension is
+# disabled, so restoration can be checked through Shell's real lifecycle.
+# It never reads entry text or synthesizes keyboard events.
+if "import * as Main from 'resource:///org/gnome/shell/ui/main.js';" not in code:
+    code = "import * as Main from 'resource:///org/gnome/shell/ui/main.js';\n" + code
+code += '''
+const testSearchEntry = Main.overview.searchEntry.clutter_text;
+const testOriginalSearchHints = testSearchEntry.get_input_hints();
+const testOriginalSearchMasked = Boolean(testSearchEntry.password_char);
+const testSearchObserver = Gio.DBusExportedObject.wrapJSObject(`
+<node><interface name="org.gnome.Shell.Extensions.MuteProfanityTest">
+<method name="SearchState">
+<arg type="u" direction="out"/><arg type="u" direction="out"/>
+<arg type="u" direction="out"/><arg type="b" direction="out"/>
+<arg type="b" direction="out"/>
+</method></interface></node>`, {
+    SearchState() {
+        return [testSearchEntry.get_input_hints(), testOriginalSearchHints,
+            Clutter.InputContentHintFlags.SENSITIVE_DATA,
+            Boolean(testSearchEntry.password_char), testOriginalSearchMasked];
+    },
+});
+testSearchObserver.export(Gio.DBus.session,
+    '/org/gnome/Shell/Extensions/MuteProfanityTest');
+'''
 probe = '''<method name="Probe">
       <arg type="b" direction="out"/><arg type="b" direction="out"/>
       <arg type="u" direction="out"/><arg type="u" direction="out"/>

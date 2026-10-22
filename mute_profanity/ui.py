@@ -115,6 +115,7 @@ class Preferences(Gtk.Window):
         title.get_style_context().add_class("page-title")
         intro.pack_start(title, False, False, 0)
         intro.pack_start(_label("Локальный фильтр брани с паузой после срабатывания.", muted=True), False, False, 0)
+        intro.pack_start(_label("Обычный набор остаётся привычным. При совпадении блокируется клавиша; уже введённые буквы нужно исправить самостоятельно.", muted=True), False, False, 0)
         page.pack_start(intro, False, False, 0)
 
         self.status = _label("")
@@ -130,7 +131,7 @@ class Preferences(Gtk.Window):
         _row(behavior, "Фильтр включён", self.enabled)
         self.instant_trigger = Gtk.Switch(active=self.settings.instant_trigger)
         _row(behavior, "Мгновенная реакция", self.instant_trigger,
-             "Сразу при совпадении. Если выключено — после пробела или Enter. "
+             "Сразу при совпадении. Если выключено — после пробела или Enter, когда слово уже введено. "
              "Начало обычного слова тоже может совпасть; добавьте слово в исключения.")
         self.cooldown = Gtk.SpinButton.new_with_range(3, 60, 1)
         self.cooldown.set_value(self.settings.cooldown_seconds)

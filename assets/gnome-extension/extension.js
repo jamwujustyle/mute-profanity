@@ -7,6 +7,7 @@ import St from 'gi://St';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Dialog from 'resource:///org/gnome/shell/ui/dialog.js';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 
 const OBJECT_PATH = '/org/gnome/Shell/Extensions/MuteProfanity';
@@ -129,6 +130,8 @@ export default class MuteProfanityExtension extends Extension {
     enable() {
         this._dialog = null;
         this._dbus = null;
+        this._searchEntryText = null;
+        this._searchEntryWasSensitive = false;
         const bridge = this.dir.get_child('bridge.json');
         const size = bridge.query_info('standard::size', Gio.FileQueryInfoFlags.NONE, null).get_size();
         if (size > 4096)
@@ -140,13 +143,47 @@ export default class MuteProfanityExtension extends Extension {
             throw new Error('Mute requires an installed Python entry point');
         this._entryPath = config.entry_path;
         try {
+            this._markSearchEntry();
             this._dbus = Gio.DBusExportedObject.wrapJSObject(INTERFACE_XML, this);
             this._dbus.export(Gio.DBus.session, OBJECT_PATH);
         } catch (error) {
-            this._dbus?.unexport();
-            this._dbus = null;
-            this._entryPath = null;
+            try {
+                this._dbus?.unexport();
+            } finally {
+                this._dbus = null;
+                this._entryPath = null;
+                this._restoreSearchEntryHints();
+            }
             throw error;
+        }
+    }
+
+    _markSearchEntry() {
+        // Shell search needs each key immediately to update application
+        // results. Mark this one entry private so IBus bypasses composition;
+        // its visible text and every other Shell/application entry are intact.
+        const entry = Main.overview.searchEntry.clutter_text;
+        const sensitive = Clutter.InputContentHintFlags.SENSITIVE_DATA;
+        const hints = entry.get_input_hints();
+        this._searchEntryText = entry;
+        this._searchEntryWasSensitive = Boolean(hints & sensitive);
+        // Use the typed accessors: Mutter 46's flags GObject property is
+        // marshalled as an enum, while these methods preserve the flags.
+        entry.set_input_hints(hints | sensitive);
+    }
+
+    _restoreSearchEntryHints() {
+        const entry = this._searchEntryText;
+        const wasSensitive = this._searchEntryWasSensitive;
+        this._searchEntryText = null;
+        this._searchEntryWasSensitive = false;
+        if (entry) {
+            const sensitive = Clutter.InputContentHintFlags.SENSITIVE_DATA;
+            const hints = entry.get_input_hints();
+            // Other extensions may have changed unrelated hints meanwhile.
+            entry.set_input_hints(wasSensitive
+                ? hints | sensitive
+                : hints & ~sensitive);
         }
     }
 
@@ -200,9 +237,13 @@ export default class MuteProfanityExtension extends Extension {
         try {
             this.Hide();
         } finally {
-            this._dbus?.unexport();
-            this._dbus = null;
-            this._entryPath = null;
+            try {
+                this._dbus?.unexport();
+            } finally {
+                this._dbus = null;
+                this._entryPath = null;
+                this._restoreSearchEntryHints();
+            }
         }
     }
 }

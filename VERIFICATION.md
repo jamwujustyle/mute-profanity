@@ -1,4 +1,4 @@
-# Verification — 21 October 2026
+# Verification — 22 October 2026
 
 Built for Ubuntu 24.04, GNOME 46, IBus 1.5.29, Python 3.12.
 No model, API key, subscription, network client, keyboard-device permission,
@@ -6,19 +6,22 @@ or administrator access is used by the app.
 
 ## Checks
 
-- **131 ordinary checks passed**, including Russian morphology, English compounds,
+- **135 ordinary checks passed**, including Russian morphology, English compounds,
   transliteration, masked spellings, innocent-word regressions, custom lists,
   config validation, bounded input, composition, cooldowns, staged installation,
   activation/source mapping, immediate detection, Windows policy/native-API
   adapters with simulated calls, packaging, and truthful readiness reports.
-  Thirty display/session checks are skipped by normal discovery.
-- **21 real IBus integration checks passed** using a private D-Bus/IBus session.
+  Thirty-five display/session checks are skipped by normal discovery.
+- **26 real IBus integration checks passed** using a private D-Bus/IBus session.
   They verify registry discovery from the installation XML, both layout metadata,
-  safe commits, blocked words and submission, Russian keyvals, Backspace/native
+  native safe key passthrough, blocked matching keys/submission, Russian keyvals, Backspace/native
   navigation, shared cooldown, emergency pause, key-release handling, password,
-  PIN and private-field bypass, safe/unsafe focus loss, invisible formatting,
+  PIN, other declared nonmessage purposes and private-field bypass, focus loss without commits or penalties, invisible formatting,
   automatic dictionary reload, accented Compose input, immediate RU/EN/custom
-  matching, Backspace rechecking and allowlisted longer-word prefixes.
+  matching, Backspace rechecking and allowlisted longer-word prefixes. Safe
+  application-name/address-prefix input and Enter emit neither preedit updates
+  nor replacement text commits. Editing and clipboard/selection shortcuts keep
+  their native key flow. Only a completed Compose character is committed.
 - **9 GTK/config checks passed** under isolated Xvfb, covering missing setup,
   actual active-source status, closing settings without disabling the engine,
   asynchronous activation failure, persisted immediate mode, the English
@@ -27,7 +30,9 @@ or administrator access is used by the app.
 - **1 actual GNOME 46 runtime check passed** in a nested Shell on private D-Bus
   and Xvfb. The production extension acquired the full-stage keyboard/pointer
   modal grab, destroyed its actor and released the grab after expiry, accepted
-  Hide safely, and acquired/released another grab. A read-only state probe was
+  Hide safely, and acquired/released another grab. Overview search receives the
+  private-input hint without password masking; actual extension disable restores
+  its original hints and re-enable marks it again. A read-only state probe was
   inserted only into the temporary test copy; no input events were injected.
 - Python compilation, shell syntax and whitespace checks passed.
 - A local English dictionary audit checked 104,334 words for accidental matches;
@@ -35,6 +40,10 @@ or administrator access is used by the app.
   false-positive check, not a representative profanity-recall measurement.
 
 ## Measured resource use
+
+The resource measurements below are the 21 October baseline, before the native
+typing compatibility change. They are retained as measured observations rather
+than claimed as a new performance measurement.
 
 | Measurement | Observed |
 | --- | ---: |
@@ -103,11 +112,14 @@ prepared; it has not been run remotely.
 
 Installed and verified: native app, per-user desktop launcher, IBus component
 registration and GNOME service configuration. Live diagnostics confirmed both
-guarded sources configured, `mute-en` selected, and the separate engine process
+guarded sources configured, `mute-ru` selected, and the separate engine process
 running independently of Settings. The updated installed source reports version
-0.2.0 with immediate mode enabled and no active pause. The GNOME modal companion
-is staged for loading at the next login; it cannot hot-load into this GNOME 46
-session. Its actual modal behavior was verified in the isolated session above.
+0.2.0 with filtering restored after the temporary repair pause. The existing
+GNOME desktop modal component is loaded and ready. The native-typing repair is
+active immediately after restarting only the IBus service; it needs no new
+login. Updated Shell search-hint code is staged for the next login, since GNOME
+46 cannot hot-reload the extension's JavaScript module. Ordinary safe search
+typing already passes through natively without that additional exemption.
 
 Activation loads missing engines through the user's IBus service and replaces
 ordinary US/RU sources with guarded sources. The settings window reports actual

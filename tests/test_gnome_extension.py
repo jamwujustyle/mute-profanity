@@ -38,6 +38,114 @@ class ShellSettings:
 
 
 class GnomeExtensionTests(unittest.TestCase):
+    def _run_search_entry_case(self, scenario):
+        source = (ASSETS / "extension.js").read_text()
+        # Run the actual extension lifecycle/methods in GJS. Only imported
+        # Shell/transport objects are replaced; no live desktop is contacted.
+        source = re.sub(r"^import .+;\n", "", source, flags=re.M)
+        source = source.replace("export default class MuteProfanityExtension", "class MuteProfanityExtension")
+        prefix = r'''
+const sensitive = 0x40;
+const entry = {
+    _hints: 0x04, text: 'browser', password_char: 0,
+    get_input_hints() { return this._hints; },
+    set_input_hints(value) { this._hints = value; },
+    connect() { throw new Error('Search marking must not add focus listeners'); },
+};
+Object.defineProperty(entry, 'input_hints', {
+    get() { throw new Error('Use typed flags getter, not the broken Mutter 46 property'); },
+    set(_value) { throw new Error('Use typed flags setter, not the broken Mutter 46 property'); },
+});
+const unrelatedEntry = {input_hints: 0x02};
+const Main = {overview: {searchEntry: {clutter_text: entry}}};
+const Clutter = {InputContentHintFlags: {SENSITIVE_DATA: sensitive}};
+const GObject = {registerClass(klass) { return klass; }};
+const ModalDialog = {ModalDialog: class {}};
+const Dialog = {}, Shell = {}, St = {};
+let failExport = false, failUnexport = false;
+const calls = {exports: 0, unexports: 0};
+const Gio = {
+    FileQueryInfoFlags: {NONE: 0},
+    File: {new_for_path() { return {query_exists() { return true; }}; }},
+    DBus: {session: {}},
+    DBusExportedObject: {wrapJSObject() { return {
+        export() { calls.exports++; if (failExport) throw new Error('export failed'); },
+        unexport() { calls.unexports++; if (failUnexport) throw new Error('cleanup failed'); },
+    }; }},
+};
+const GLib = {path_is_absolute(value) { return value.startsWith('/'); }};
+class Extension {
+    constructor() {
+        this.dir = {get_child() { return {
+            query_info() { return {get_size() { return 32; }}; },
+            load_contents() { return [true, new TextEncoder().encode('{"entry_path":"/test/run.py"}')]; },
+        }; }};
+    }
+}
+function equal(actual, expected, message) {
+    if (actual !== expected)
+        throw new Error(message + ': got ' + actual + ', expected ' + expected);
+}
+'''
+        result = subprocess.run(["gjs", "-c", prefix + source + scenario],
+                                capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which("gjs"), "GJS runtime is not installed")
+    def test_search_privacy_marker_is_narrow_static_and_does_not_mask_text(self):
+        self._run_search_entry_case('''
+const extension = new MuteProfanityExtension();
+extension.enable();
+equal(entry.get_input_hints(), 0x04 | sensitive, 'search sensitivity');
+equal(entry.text, 'browser', 'search text');
+equal(entry.password_char, 0, 'search must remain visible');
+equal(unrelatedEntry.input_hints, 0x02, 'unrelated entry hints');
+entry.set_input_hints(entry.get_input_hints() | 0x200);
+extension.disable();
+equal(entry.get_input_hints(), 0x204, 'restore only the sensitive bit');
+equal(extension._searchEntryText, null, 'entry reference cleanup');
+''')
+
+    @unittest.skipUnless(shutil.which("gjs"), "GJS runtime is not installed")
+    def test_disable_restores_original_sensitive_bit_and_preserves_other_hint_changes(self):
+        self._run_search_entry_case('''
+entry.set_input_hints(0x04 | sensitive);
+const extension = new MuteProfanityExtension();
+extension.enable();
+entry.set_input_hints(0x200);
+extension.disable();
+equal(entry.get_input_hints(), 0x200 | sensitive, 'original sensitive bit');
+extension.disable();
+equal(entry.get_input_hints(), 0x200 | sensitive, 'repeated disable');
+''')
+
+    @unittest.skipUnless(shutil.which("gjs"), "GJS runtime is not installed")
+    def test_enable_failure_restores_search_hints_even_if_transport_cleanup_fails(self):
+        self._run_search_entry_case('''
+failExport = true;
+failUnexport = true;
+const extension = new MuteProfanityExtension();
+let failed = false;
+try { extension.enable(); } catch (_error) { failed = true; }
+equal(failed, true, 'enable must report failure');
+equal(entry.get_input_hints(), 0x04, 'failed enable search hints');
+equal(extension._searchEntryText, null, 'failed enable entry cleanup');
+equal(extension._dbus, null, 'failed enable transport cleanup');
+equal(extension._entryPath, null, 'failed enable path cleanup');
+''')
+
+    @unittest.skipUnless(shutil.which("gjs"), "GJS runtime is not installed")
+    def test_disable_restores_search_hints_when_dialog_cleanup_raises(self):
+        self._run_search_entry_case('''
+const extension = new MuteProfanityExtension();
+extension.enable();
+extension.Hide = () => { throw new Error('dialog cleanup failed'); };
+try { extension.disable(); } catch (_error) {}
+equal(entry.get_input_hints(), 0x04, 'disable after dialog error');
+equal(extension._searchEntryText, null, 'disable after error entry cleanup');
+equal(calls.unexports, 1, 'transport must still be unexported');
+''')
+
     def test_extension_metadata_and_dbus_contract_match_client(self):
         metadata = json.loads((ASSETS / "metadata.json").read_text())
         self.assertEqual(metadata["uuid"], gnome_modal.UUID)
